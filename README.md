@@ -263,7 +263,7 @@ cp Resources/AppIcon.icns dist/CodexLauncher.app/Contents/Resources/AppIcon.icns
 Zip the app for GitHub Releases:
 
 ```sh
-ditto -c -k --keepParent dist/CodexLauncher.app dist/CodexLauncher-v0.1.0.zip
+ditto -c -k --keepParent dist/CodexLauncher.app dist/CodexLauncher-v0.1.1.zip
 ```
 
 `dist/` is intentionally ignored by Git. Upload the zip file as a GitHub Release

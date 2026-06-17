@@ -21,7 +21,7 @@ struct ProfileEditorView: View {
 
                 Picker("model_provider", selection: draftBinding(\.modelProvider)) {
                     ForEach(store.providers.keys.sorted(), id: \.self) { providerID in
-                        Text(providerID).tag(providerID)
+                        Text(providerPickerTitle(for: providerID)).tag(providerID)
                     }
                     if !currentProviderID.isEmpty, store.providers[currentProviderID] == nil {
                         Text("\(currentProviderID) (missing)").tag(currentProviderID)
@@ -113,6 +113,13 @@ struct ProfileEditorView: View {
 
     private var currentCatalogPath: String {
         currentProviderID.isEmpty ? "" : store.defaultCatalogPath(for: currentProviderID)
+    }
+
+    private func providerPickerTitle(for providerID: String) -> String {
+        guard let provider = store.providers[providerID] else { return providerID }
+        let name = provider.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != providerID else { return providerID }
+        return "\(name) (\(providerID))"
     }
 
     private func fetchModelsIfNeeded() {

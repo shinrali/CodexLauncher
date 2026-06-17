@@ -18,7 +18,6 @@ final class ConfigStore: ObservableObject {
 
     private var originalText = ""
     private var didImportLegacyProfiles = false
-    private var didNormalizeProviderNames = false
     private var didNormalizeProviderWireAPIs = false
     private var didNormalizeProviderBaseURLs = false
     private let fileManager = FileManager.default
@@ -74,7 +73,7 @@ final class ConfigStore: ObservableObject {
             if didImportLegacyProfiles {
                 try writeLauncherState()
             }
-            if didImportLegacyProfiles || didNormalizeProviderNames || didNormalizeProviderWireAPIs || didNormalizeProviderBaseURLs {
+            if didImportLegacyProfiles || didNormalizeProviderWireAPIs || didNormalizeProviderBaseURLs {
                 try writeConfig(activeProfileID: nil, clearActiveSettings: false)
             }
             if selectedProfileID == nil ||
@@ -248,7 +247,6 @@ final class ConfigStore: ObservableObject {
             modelCatalogJSON: defaultCatalogPath(for: providerID)
         ))
         profiles.sort { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
-        _ = syncProviderName(providerID: providerID, model: draft.model)
 
         selectedProfileID = cleanID
         refreshDraft()
@@ -379,7 +377,6 @@ final class ConfigStore: ObservableObject {
         var parsedProviders: [String: ModelProviderEntry] = [:]
         let stateProfiles = loadLauncherProfiles()
         didImportLegacyProfiles = false
-        didNormalizeProviderNames = false
         didNormalizeProviderWireAPIs = false
         didNormalizeProviderBaseURLs = false
 
@@ -426,9 +423,6 @@ final class ConfigStore: ObservableObject {
         profiles = (didImportLegacyProfiles ? parsedProfiles : stateProfiles)
             .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
         providers = parsedProviders
-        didNormalizeProviderNames = profiles.reduce(false) { didChange, profile in
-            syncProviderName(providerID: profile.modelProvider, model: profile.model) || didChange
-        }
     }
 
     private func refreshDraft() {
@@ -562,21 +556,6 @@ final class ConfigStore: ObservableObject {
         }
 
         return lines.joined(separator: "\n")
-    }
-
-    private func syncProviderName(providerID: String, model: String) -> Bool {
-        let cleanProviderID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanProviderID.isEmpty,
-              !cleanModel.isEmpty,
-              var provider = providers[cleanProviderID]
-        else { return false }
-
-        let expectedName = "\(cleanProviderID) \(cleanModel)"
-        guard provider.name != expectedName else { return false }
-        provider.name = expectedName
-        providers[cleanProviderID] = provider
-        return true
     }
 
     private func launchEnvironment(profileID: String) -> [String: String] {
