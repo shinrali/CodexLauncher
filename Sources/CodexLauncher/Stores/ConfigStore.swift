@@ -361,14 +361,13 @@ final class ConfigStore: ObservableObject {
                 try CodexAppLauncher.launch(restartRunningApp: restartRunningApp)
                 statusMessage = restartRunningApp ? "已关闭并启动官方版本 Codex.app" : "已启动官方版本 Codex.app"
             case let .profile(id):
+                try writeConfig(activeProfileID: id)
                 try writeProfileOverlay(profileID: id)
-                try writeConfig(activeProfileID: nil, clearActiveSettings: false)
-                try CodexAppLauncher.launchWithConfigOverrides(
-                    launchConfigOverrides(profileID: id),
+                try CodexAppLauncher.launch(
                     restartRunningApp: restartRunningApp,
                     environment: launchEnvironment(profileID: id)
                 )
-                statusMessage = restartRunningApp ? "已关闭并用 profile 启动 Codex.app：\(id)" : "已用 profile 配置启动 Codex.app：\(id)"
+                statusMessage = restartRunningApp ? "已关闭并用 profile 启动 Codex.app：\(id)" : "已写入当前 profile 配置并启动 Codex.app：\(id)"
             }
         } catch {
             errorMessage = "启动失败：\(error.localizedDescription)"
@@ -593,18 +592,6 @@ final class ConfigStore: ObservableObject {
         let token = ProviderTokenStore.load(providerID: provider.id) ?? ""
         guard !token.isEmpty else { return [:] }
         return [envKey: token]
-    }
-
-    private func launchConfigOverrides(profileID: String) -> [String] {
-        guard let profile = profiles.first(where: { $0.id == profileID }) else { return [] }
-
-        let catalogPath = profile.modelProvider.isEmpty ? profile.modelCatalogJSON : defaultCatalogPath(for: profile.modelProvider)
-        var overrides: [String] = []
-        if !profile.model.isEmpty { overrides.append("model=\(TOMLSupport.quoted(profile.model))") }
-        if !profile.openAIBaseURL.isEmpty { overrides.append("openai_base_url=\(TOMLSupport.quoted(profile.openAIBaseURL))") }
-        if !profile.modelProvider.isEmpty { overrides.append("model_provider=\(TOMLSupport.quoted(profile.modelProvider))") }
-        if !catalogPath.isEmpty { overrides.append("model_catalog_json=\(TOMLSupport.quoted(catalogPath))") }
-        return overrides
     }
 
     private func writeConfig(activeProfileID: String?, clearActiveSettings: Bool = false) throws {

@@ -3,7 +3,7 @@
 CodexLauncher is a small macOS SwiftUI launcher for managing local Codex model
 profiles and model providers. It edits the relevant files under `~/.codex`,
 stores provider tokens in macOS Keychain, and launches `/Applications/Codex.app`
-with the selected profile as one-off `codex app -c ...` overrides.
+with the selected profile materialized as Codex's active model configuration.
 
 It is intended for people who switch between multiple Codex model backends, such
 as OpenAI-compatible proxies, local Ollama, LM Studio, vLLM, or other custom
@@ -67,7 +67,8 @@ configuration:
 - `~/.codex/<profile>.config.toml`
   Stores Codex 0.134.0+ profile-layer files using top-level config keys.
 - `~/.codex/config.toml`
-  Preserves existing config and writes `[model_providers.*]` entries.
+  Preserves existing config, writes `[model_providers.*]` entries, and writes
+  the selected profile's active top-level model keys before launching Codex.app.
 - macOS Keychain
   Stores provider tokens by provider id.
 
@@ -85,14 +86,23 @@ model_provider = "openai"
 model_catalog_json = "/Users/me/.codex/example-models.json"
 ```
 
-CodexLauncher follows that layout. When you launch a profile, it writes the
-matching `~/.codex/<profile>.config.toml`, then starts Codex through:
+CodexLauncher follows that layout by writing the matching
+`~/.codex/<profile>.config.toml`.
 
-```sh
-codex app -c model='"..."' -c model_provider='"..."' -c model_catalog_json='"..."'
+For the desktop app, CodexLauncher also writes the selected profile into the
+active top-level keys in `~/.codex/config.toml` before launching
+`/Applications/Codex.app`:
+
+```toml
+model = "gpt-5.5"
+model_provider = "openai"
+model_catalog_json = "/Users/me/.codex/example-models.json"
 ```
 
-This avoids permanently rewriting your active top-level Codex model selection.
+This compatibility step is required because the desktop app starts from the
+active config file and does not directly pick a separate profile file.
+CodexLauncher backs up `~/.codex/config.toml` before changing it and preserves
+non-launcher-managed sections.
 
 ## Main Concepts
 
