@@ -125,7 +125,9 @@ A model provider describes how Codex connects to a backend:
 - `base_url`
   OpenAI-compatible API base URL, such as `http://localhost:11434/v1`.
 - `env_key`
-  Environment variable name used by Codex for the bearer token.
+  Optional environment variable name used by Codex for the bearer token. If a
+  Keychain token exists and `env_key` is blank, CodexLauncher generates one from
+  the provider id, such as `OMLX_API_KEY` for `oMLX`.
 - `wire_api`
   Currently normalized to `responses`.
 - `token`
@@ -151,7 +153,8 @@ wire_api = "responses"
 ```
 
 If you enter a token in CodexLauncher, the token is stored in Keychain and
-injected as `PROXY_API_KEY` when launching Codex or fetching models.
+injected through `env_key` when launching Codex. Fetch Models can use the
+Keychain token directly from the app.
 
 ### Profiles
 
@@ -263,7 +266,7 @@ cp Resources/AppIcon.icns dist/CodexLauncher.app/Contents/Resources/AppIcon.icns
 Zip the app for GitHub Releases:
 
 ```sh
-ditto -c -k --keepParent dist/CodexLauncher.app dist/CodexLauncher-v0.1.1.zip
+ditto --noextattr --norsrc -c -k --keepParent dist/CodexLauncher.app dist/CodexLauncher-v0.1.2.zip
 ```
 
 `dist/` is intentionally ignored by Git. Upload the zip file as a GitHub Release

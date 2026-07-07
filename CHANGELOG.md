@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.2 - 2026-07-07
+
+- Fix a crash when switching a profile between providers after editing provider settings.
+- Make model catalog editor bindings resilient when the selected provider reloads a different model JSON.
+- Generate a default provider `env_key` from the provider id when a Keychain token exists and `env_key` is blank.
+- Clarify provider token and `env_key` behavior in the README.
+
 ## v0.1.1 - 2026-06-18
 
 - Stop automatically renaming model providers when saving profiles or reloading config.

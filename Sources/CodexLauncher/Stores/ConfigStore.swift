@@ -20,6 +20,7 @@ final class ConfigStore: ObservableObject {
     private var didImportLegacyProfiles = false
     private var didNormalizeProviderWireAPIs = false
     private var didNormalizeProviderBaseURLs = false
+    private var didNormalizeProviderEnvKeys = false
     private let fileManager = FileManager.default
 
     var configURL: URL {
@@ -73,7 +74,7 @@ final class ConfigStore: ObservableObject {
             if didImportLegacyProfiles {
                 try writeLauncherState()
             }
-            if didImportLegacyProfiles || didNormalizeProviderWireAPIs || didNormalizeProviderBaseURLs {
+            if didImportLegacyProfiles || didNormalizeProviderWireAPIs || didNormalizeProviderBaseURLs || didNormalizeProviderEnvKeys {
                 try writeConfig(activeProfileID: nil, clearActiveSettings: false)
             }
             if selectedProfileID == nil ||
@@ -267,11 +268,14 @@ final class ConfigStore: ObservableObject {
         }
 
         providers.removeValue(forKey: providerDraft.originalID)
+        let cleanToken = providerDraft.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanEnvKey = normalizedEnvKey(providerDraft.envKey, providerID: cleanID, hasToken: !cleanToken.isEmpty)
+
         providers[cleanID] = ModelProviderEntry(
             id: cleanID,
             name: providerDraft.name,
             baseURL: normalizedBaseURL(providerDraft.baseURL),
-            envKey: providerDraft.envKey,
+            envKey: cleanEnvKey,
             wireAPI: providerDraft.wireAPI
         )
 
@@ -279,7 +283,6 @@ final class ConfigStore: ObservableObject {
             if cleanID != providerDraft.originalID {
                 try ProviderTokenStore.delete(providerID: providerDraft.originalID)
             }
-            let cleanToken = providerDraft.token.trimmingCharacters(in: .whitespacesAndNewlines)
             if cleanToken.isEmpty {
                 try ProviderTokenStore.delete(providerID: cleanID)
             } else {
@@ -379,6 +382,7 @@ final class ConfigStore: ObservableObject {
         didImportLegacyProfiles = false
         didNormalizeProviderWireAPIs = false
         didNormalizeProviderBaseURLs = false
+        didNormalizeProviderEnvKeys = false
 
         for section in TOMLSupport.splitSections(text) {
             guard let name = section.name else { continue }
@@ -405,11 +409,16 @@ final class ConfigStore: ObservableObject {
                 if rawBaseURL != baseURL {
                     didNormalizeProviderBaseURLs = true
                 }
+                let rawEnvKey = values["env_key"] ?? ""
+                let envKey = normalizedEnvKey(rawEnvKey, providerID: id, hasToken: ProviderTokenStore.load(providerID: id)?.isEmpty == false)
+                if rawEnvKey != envKey {
+                    didNormalizeProviderEnvKeys = true
+                }
                 parsedProviders[id] = ModelProviderEntry(
                     id: id,
                     name: values["name"] ?? "",
                     baseURL: baseURL,
-                    envKey: values["env_key"] ?? "",
+                    envKey: envKey,
                     wireAPI: wireAPI
                 )
             }
@@ -511,6 +520,11 @@ final class ConfigStore: ObservableObject {
         if providerDraft.wireAPI != "responses" {
             warnings.append("wire_api 应为 responses。")
         }
+        let cleanToken = providerDraft.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanEnvKey = providerDraft.envKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanToken.isEmpty && cleanEnvKey.isEmpty {
+            warnings.append("已保存 token 但 env_key 为空，保存时会自动写入：\(defaultEnvKey(for: providerDraft.id))")
+        }
 
         return warnings
     }
@@ -563,12 +577,12 @@ final class ConfigStore: ObservableObject {
               let provider = providers[profile.modelProvider]
         else { return [:] }
 
-        let envKey = provider.envKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = ProviderTokenStore.load(providerID: provider.id) ?? ""
+        let envKey = effectiveEnvKey(for: provider, forceDefault: !token.isEmpty)
         guard envKey.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else {
             return [:]
         }
 
-        let token = ProviderTokenStore.load(providerID: provider.id) ?? ""
         guard !token.isEmpty else { return [:] }
         return [envKey: token]
     }
@@ -601,7 +615,7 @@ final class ConfigStore: ObservableObject {
         var chunks = preserved.map { trimTrailingBlankLines($0.lines).joined(separator: "\n") }
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
-        chunks.append(renderProviders())
+        chunks.append(renderProviders(activeProfileID: activeProfileID))
 
         return chunks
             .filter { !$0.isEmpty }
@@ -641,13 +655,18 @@ final class ConfigStore: ObservableObject {
         sections[rootIndex].lines = lines
     }
 
-    private func renderProviders() -> String {
-        providers.keys.sorted().compactMap { key -> String? in
+    private func renderProviders(activeProfileID: String? = nil) -> String {
+        let activeProviderID = activeProfileID.flatMap { profileID in
+            profiles.first(where: { $0.id == profileID })?.modelProvider
+        }
+
+        return providers.keys.sorted().compactMap { key -> String? in
             guard let provider = providers[key] else { return nil }
             var lines = ["[model_providers.\(key)]"]
             if !provider.name.isEmpty { lines.append("name = \(TOMLSupport.quoted(provider.name))") }
             if !provider.baseURL.isEmpty { lines.append("base_url = \(TOMLSupport.quoted(provider.baseURL))") }
-            if !provider.envKey.isEmpty { lines.append("env_key = \(TOMLSupport.quoted(provider.envKey))") }
+            let envKey = effectiveEnvKey(for: provider, forceDefault: activeProviderID == key)
+            if !envKey.isEmpty { lines.append("env_key = \(TOMLSupport.quoted(envKey))") }
             if !provider.wireAPI.isEmpty { lines.append("wire_api = \(TOMLSupport.quoted(provider.wireAPI))") }
             return lines.joined(separator: "\n")
         }
@@ -673,6 +692,41 @@ final class ConfigStore: ObservableObject {
     private func normalizedWireAPI(_ value: String?) -> String {
         let cleanValue = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return cleanValue == "responses" ? "responses" : "responses"
+    }
+
+    private func normalizedEnvKey(_ value: String?, providerID: String, hasToken: Bool) -> String {
+        let cleanValue = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleanValue.isEmpty, hasToken else { return cleanValue }
+        return defaultEnvKey(for: providerID)
+    }
+
+    private func effectiveEnvKey(for provider: ModelProviderEntry, forceDefault: Bool = false) -> String {
+        let cleanValue = provider.envKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleanValue.isEmpty, forceDefault else { return cleanValue }
+        return defaultEnvKey(for: provider.id)
+    }
+
+    private func defaultEnvKey(for providerID: String) -> String {
+        let characters = providerID.uppercased().unicodeScalars.map { scalar -> Character in
+            let value = scalar.value
+            if (65...90).contains(value) || (48...57).contains(value) || value == 95 {
+                return Character(scalar)
+            }
+            return "_"
+        }
+        var key = String(characters)
+            .split(separator: "_")
+            .joined(separator: "_")
+        if key.isEmpty {
+            key = "PROVIDER"
+        }
+        if key.first?.isNumber == true {
+            key = "PROVIDER_\(key)"
+        }
+        if !key.hasSuffix("_API_KEY") {
+            key += "_API_KEY"
+        }
+        return key
     }
 
     private func normalizedBaseURL(_ value: String?) -> String {

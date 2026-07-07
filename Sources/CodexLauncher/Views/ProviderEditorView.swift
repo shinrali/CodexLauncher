@@ -36,7 +36,7 @@ struct ProviderEditorView: View {
                 }
 
                 DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
-                    TextField("env_key", text: draftBinding(\.envKey))
+                    TextField("env_key (optional)", text: draftBinding(\.envKey))
                         .fontDesign(.monospaced)
                         .textFieldStyle(.roundedBorder)
                         .editableSurface()
@@ -72,7 +72,7 @@ struct ProviderEditorView: View {
                         .help("清空 token")
                     }
 
-                    Text("env_key 写入 config.toml；token 存到 macOS Keychain，并在 Fetch Models 和启动 Codex 时注入。")
+                    Text("token 存到 macOS Keychain。env_key 可留空；保存 token 时会自动生成并写入 config.toml，也可以手动覆盖为已有环境变量名。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

@@ -30,12 +30,23 @@ final class ModelCatalogStore: ObservableObject {
     func bindingForModel(slug: String) -> Binding<CatalogModel>? {
         let cleanSlug = slug.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanSlug.isEmpty,
-              let index = models.firstIndex(where: { $0.slug == cleanSlug })
+              models.contains(where: { $0.slug == cleanSlug })
         else { return nil }
 
         return Binding(
-            get: { self.models[index] },
-            set: { self.models[index] = $0 }
+            get: {
+                self.models.first(where: { $0.slug == cleanSlug }) ?? CatalogModel(
+                    slug: cleanSlug,
+                    displayName: cleanSlug,
+                    description: "",
+                    contextWindow: nil,
+                    maxContextWindow: nil
+                )
+            },
+            set: { updatedModel in
+                guard let index = self.models.firstIndex(where: { $0.slug == cleanSlug }) else { return }
+                self.models[index] = updatedModel
+            }
         )
     }
 
