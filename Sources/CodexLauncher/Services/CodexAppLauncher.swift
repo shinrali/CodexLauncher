@@ -2,8 +2,20 @@ import AppKit
 import Foundation
 
 enum CodexAppLauncher {
-    static let appURL = URL(fileURLWithPath: "/Applications/Codex.app")
+    private static let supportedAppURLs = [
+        URL(fileURLWithPath: "/Applications/ChatGPT.app"),
+        URL(fileURLWithPath: "/Applications/Codex.app")
+    ]
     static let bundleIdentifier = "com.openai.codex"
+
+    static var appURL: URL {
+        supportedAppURLs.first { FileManager.default.fileExists(atPath: $0.path) }
+            ?? supportedAppURLs[0]
+    }
+
+    static var appDisplayName: String {
+        appURL.deletingPathExtension().lastPathComponent
+    }
 
     static var isRunning: Bool {
         NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).isEmpty == false

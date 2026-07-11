@@ -2,7 +2,7 @@
 
 CodexLauncher is a small macOS SwiftUI launcher for managing local Codex model
 profiles and model providers. It edits the relevant files under `~/.codex`,
-stores provider tokens in macOS Keychain, and launches `/Applications/Codex.app`
+stores provider tokens in macOS Keychain, and launches `/Applications/ChatGPT.app`
 with the selected profile materialized as Codex's active model configuration.
 
 It is intended for people who switch between multiple Codex model backends, such
@@ -12,12 +12,12 @@ providers.
 ## Requirements
 
 - macOS 14 or later
-- `/Applications/Codex.app`
+- `/Applications/ChatGPT.app` (the current app; legacy `/Applications/Codex.app` is also supported)
 - Swift toolchain / Xcode command line tools, if building from source
 - Codex CLI bundled inside the app:
 
 ```sh
-/Applications/Codex.app/Contents/Resources/codex
+/Applications/ChatGPT.app/Contents/Resources/codex
 ```
 
 ## Download
@@ -68,7 +68,7 @@ configuration:
   Stores Codex 0.134.0+ profile-layer files using top-level config keys.
 - `~/.codex/config.toml`
   Preserves existing config, writes `[model_providers.*]` entries, and writes
-  the selected profile's active top-level model keys before launching Codex.app.
+  the selected profile's active top-level model keys before launching ChatGPT.app.
 - macOS Keychain
   Stores provider tokens by provider id.
 
@@ -91,7 +91,7 @@ CodexLauncher follows that layout by writing the matching
 
 For the desktop app, CodexLauncher also writes the selected profile into the
 active top-level keys in `~/.codex/config.toml` before launching
-`/Applications/Codex.app`:
+`/Applications/ChatGPT.app`:
 
 ```toml
 model = "gpt-5.5"
@@ -108,7 +108,7 @@ non-launcher-managed sections.
 
 ### Official
 
-The Official entry launches `/Applications/Codex.app` without selecting a
+The Official entry launches `/Applications/ChatGPT.app` without selecting a
 launcher profile. It also clears launcher-managed top-level active model keys
 from `~/.codex/config.toml`.
 
@@ -266,7 +266,7 @@ cp Resources/AppIcon.icns dist/CodexLauncher.app/Contents/Resources/AppIcon.icns
 Zip the app for GitHub Releases:
 
 ```sh
-ditto --noextattr --norsrc -c -k --keepParent dist/CodexLauncher.app dist/CodexLauncher-v0.1.2.zip
+ditto --noextattr --norsrc -c -k --keepParent dist/CodexLauncher.app dist/CodexLauncher-v0.1.3.zip
 ```
 
 `dist/` is intentionally ignored by Git. Upload the zip file as a GitHub Release
@@ -274,7 +274,7 @@ asset instead of committing it to the repository.
 
 ## Notes
 
-- This app assumes Codex is installed at `/Applications/Codex.app`.
+- This app prefers the current `/Applications/ChatGPT.app` and falls back to the legacy `/Applications/Codex.app`.
 - Custom provider ids cannot be the reserved Codex provider ids `openai`,
   `ollama`, or `lmstudio`.
 - `base_url` values are normalized on save. For example, `localhost:8888`

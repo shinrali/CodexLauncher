@@ -360,7 +360,8 @@ final class ConfigStore: ObservableObject {
             case .official:
                 try writeConfig(activeProfileID: nil, clearActiveSettings: true)
                 try CodexAppLauncher.launch(restartRunningApp: restartRunningApp)
-                statusMessage = restartRunningApp ? "已关闭并启动官方版本 Codex.app" : "已启动官方版本 Codex.app"
+                let appName = CodexAppLauncher.appDisplayName
+                statusMessage = restartRunningApp ? "已关闭并启动官方版本 \(appName).app" : "已启动官方版本 \(appName).app"
             case let .profile(id):
                 try writeConfig(activeProfileID: id)
                 try writeProfileOverlay(profileID: id)
@@ -368,7 +369,8 @@ final class ConfigStore: ObservableObject {
                     restartRunningApp: restartRunningApp,
                     environment: launchEnvironment(profileID: id)
                 )
-                statusMessage = restartRunningApp ? "已关闭并用 profile 启动 Codex.app：\(id)" : "已写入当前 profile 配置并启动 Codex.app：\(id)"
+                let appName = CodexAppLauncher.appDisplayName
+                statusMessage = restartRunningApp ? "已关闭并用 profile 启动 \(appName).app：\(id)" : "已写入当前 profile 配置并启动 \(appName).app：\(id)"
             }
         } catch {
             errorMessage = "启动失败：\(error.localizedDescription)"
@@ -886,9 +888,9 @@ struct LaunchConfirmation: Identifiable {
     var message: String {
         switch target {
         case .official:
-            return "需要先关闭当前 Codex.app，才能切回官方默认配置。是否关闭并继续？"
+            return "需要先关闭当前 \(CodexAppLauncher.appDisplayName).app，才能切回官方默认配置。是否关闭并继续？"
         case let .profile(profileID):
-            return "需要先关闭当前 Codex.app，才能切换到 profile：\(profileID)。是否关闭并继续？"
+            return "需要先关闭当前 \(CodexAppLauncher.appDisplayName).app，才能切换到 profile：\(profileID)。是否关闭并继续？"
         }
     }
 }

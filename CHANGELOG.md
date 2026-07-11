@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.3 - 2026-07-12
+
+- Launch the renamed `/Applications/ChatGPT.app`, while retaining compatibility with the legacy `/Applications/Codex.app`.
+- Keep model provider display names independent from the selected model; provider names continue to come only from each provider's own `name` (or its id when blank).
+
 ## v0.1.2 - 2026-07-07
 
 - Fix a crash when switching a profile between providers after editing provider settings.

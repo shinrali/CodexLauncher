@@ -141,7 +141,7 @@ private struct OfficialCodexView: View {
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("直接启动 /Applications/Codex.app，不切换 profile，也不写入 active model 配置。")
+            Text("直接启动 \(CodexAppLauncher.appURL.path)，不切换 profile，也不写入 active model 配置。")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
