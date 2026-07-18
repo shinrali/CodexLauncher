@@ -2,7 +2,7 @@
 
 CodexLauncher is a small macOS SwiftUI launcher for managing local Codex model
 profiles and model providers. It edits the relevant files under `~/.codex`,
-stores provider tokens in macOS Keychain, and launches `/Applications/ChatGPT.app`
+stores provider tokens in its private Application Support JSON file, and launches `/Applications/ChatGPT.app`
 with the selected profile materialized as Codex's active model configuration.
 
 It is intended for people who switch between multiple Codex model backends, such
@@ -54,7 +54,7 @@ the app.
 For a release-style binary:
 
 ```sh
-swift build -c release
+./script/build_and_run.sh --release
 ```
 
 ## What The App Edits
@@ -69,8 +69,8 @@ configuration:
 - `~/.codex/config.toml`
   Preserves existing config, writes `[model_providers.*]` entries, and writes
   the selected profile's active top-level model keys before launching ChatGPT.app.
-- macOS Keychain
-  Stores provider tokens by provider id.
+- `~/Library/Application Support/CodexLauncher/provider-secrets.json`
+  Stores provider tokens by provider id with file permissions set to `600`.
 
 Other sections in `~/.codex/config.toml` are preserved.
 
@@ -126,12 +126,16 @@ A model provider describes how Codex connects to a backend:
   OpenAI-compatible API base URL, such as `http://localhost:11434/v1`.
 - `env_key`
   Optional environment variable name used by Codex for the bearer token. If a
-  Keychain token exists and `env_key` is blank, CodexLauncher generates one from
+  locally stored token exists and `env_key` is blank, CodexLauncher generates one from
   the provider id, such as `OMLX_API_KEY` for `oMLX`.
 - `wire_api`
   Currently normalized to `responses`.
 - `token`
-  Stored in macOS Keychain, not in `config.toml`.
+  Stored in CodexLauncher's private Application Support JSON, not in `config.toml`.
+
+Provider settings that CodexLauncher does not edit, including `query_params`,
+`http_headers`, `env_http_headers`, and future nested provider tables, are
+preserved when the provider is saved or renamed.
 
 Example provider in `~/.codex/config.toml`:
 
@@ -152,9 +156,29 @@ env_key = "PROXY_API_KEY"
 wire_api = "responses"
 ```
 
-If you enter a token in CodexLauncher, the token is stored in Keychain and
+If you enter a token in CodexLauncher, the token is stored in its private local JSON file and
 injected through `env_key` when launching Codex. Fetch Models can use the
-Keychain token directly from the app.
+stored token directly from the app.
+
+For short-lived bearer tokens, Codex also supports command-backed
+authentication:
+
+```toml
+[model_providers.proxy]
+name = "Proxy"
+base_url = "https://proxy.example.com/v1"
+wire_api = "responses"
+
+[model_providers.proxy.auth]
+command = "/usr/local/bin/fetch-codex-token"
+args = ["--audience", "codex"]
+timeout_ms = 5000
+refresh_interval_ms = 300000
+```
+
+The command must print only the bearer token to stdout. Command authentication
+cannot be combined with `env_key`, a locally stored token, `experimental_bearer_token`,
+or `requires_openai_auth`.
 
 ### Profiles
 
@@ -202,7 +226,7 @@ endpoint.
 
 Token lookup order:
 
-1. Token stored in CodexLauncher's Keychain entry for that provider.
+1. Token stored in CodexLauncher's private Application Support JSON for that provider.
 2. The configured `env_key` from the current process environment.
 3. The configured `env_key` from the user's login shell environment.
 
@@ -224,14 +248,18 @@ Catalog tab lets you inspect and edit the current profile's model metadata.
 ## Token Handling
 
 Provider tokens are not written to the repository or to `config.toml`.
+They are also not written to `~/.codex/auth.json`; that file belongs to
+OpenAI/ChatGPT login credential storage.
 
-They are stored in macOS Keychain with this service name:
+They are stored in:
 
 ```text
-CodexLauncher.ProviderToken
+~/Library/Application Support/CodexLauncher/provider-secrets.json
 ```
 
-The provider id is used as the Keychain account name.
+The containing directory is set to mode `700` and the JSON file to mode `600`.
+Environment variables are created only in the launched ChatGPT process. Existing
+legacy Keychain entries are not read, migrated, or deleted automatically.
 
 ## Local Files Created
 
@@ -242,6 +270,7 @@ Running the app may create or update:
 ~/.codex/codex-launcher-state.json
 ~/.codex/<profile>.config.toml
 ~/.codex/<provider>-models.json
+~/Library/Application Support/CodexLauncher/provider-secrets.json
 ~/.codex/backups/config-*.toml
 ```
 
@@ -252,21 +281,18 @@ Backups are created before writing `~/.codex/config.toml`.
 Build a release binary:
 
 ```sh
-swift build -c release
+./script/build_and_run.sh --release --no-open
 ```
 
-Create or update the app bundle:
-
-```sh
-mkdir -p dist/CodexLauncher.app/Contents/MacOS dist/CodexLauncher.app/Contents/Resources
-cp .build/release/CodexLauncher dist/CodexLauncher.app/Contents/MacOS/CodexLauncher
-cp Resources/AppIcon.icns dist/CodexLauncher.app/Contents/Resources/AppIcon.icns
-```
+The current app version is read from `VERSION` and written to
+`CFBundleShortVersionString` and `CFBundleVersion`, so it appears in the macOS
+About window and Finder metadata.
 
 Zip the app for GitHub Releases:
 
 ```sh
-ditto --noextattr --norsrc -c -k --keepParent dist/CodexLauncher.app dist/CodexLauncher-v0.1.3.zip
+VERSION="$(tr -d '[:space:]' < VERSION)"
+ditto --noextattr --norsrc -c -k --keepParent dist/CodexLauncher.app "dist/CodexLauncher-v${VERSION}.zip"
 ```
 
 `dist/` is intentionally ignored by Git. Upload the zip file as a GitHub Release
@@ -280,7 +306,7 @@ asset instead of committing it to the repository.
 - `base_url` values are normalized on save. For example, `localhost:8888`
   becomes `http://localhost:8888/v1`.
 - `wire_api` is normalized to `responses`.
-- The app is currently unsigned and unnotarized.
+- The local build uses an ad-hoc signature and is not notarized.
 
 ## License
 

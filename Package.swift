@@ -14,6 +14,11 @@ let package = Package(
         .executableTarget(
             name: "CodexLauncher",
             path: "Sources/CodexLauncher"
+        ),
+        .testTarget(
+            name: "CodexLauncherTests",
+            dependencies: ["CodexLauncher"],
+            path: "Tests/CodexLauncherTests"
         )
     ]
 )

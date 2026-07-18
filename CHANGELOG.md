@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Show the current version in the macOS About window and bundle metadata.
+- Add command-backed bearer token authentication for custom model providers.
+- Preserve unknown provider keys and nested provider tables when editing or renaming providers.
+- Support provider query parameters, static headers, environment-backed headers, and command authentication when fetching `/models`.
+- Keep `auth.json` reserved for OpenAI/ChatGPT login credentials; third-party static tokens use CodexLauncher's private local JSON and are injected through `env_key`.
+- Replace Keychain-backed provider tokens with a private `provider-secrets.json` file under Application Support to avoid repeated macOS password prompts.
+
 ## v0.1.3 - 2026-07-12
 
 - Launch the renamed `/Applications/ChatGPT.app`, while retaining compatibility with the legacy `/Applications/Codex.app`.

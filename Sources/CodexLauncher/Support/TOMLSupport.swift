@@ -72,4 +72,112 @@ enum TOMLSupport {
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
     }
+
+    static func stringArray(_ value: String?) -> [String] {
+        guard var value else { return [] }
+        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.hasPrefix("["), value.hasSuffix("]") else { return [] }
+        return splitCommaSeparated(String(value.dropFirst().dropLast())).map(unquote)
+    }
+
+    static func quotedArray(_ values: [String]) -> String {
+        "[" + values.map(quoted).joined(separator: ", ") + "]"
+    }
+
+    static func inlineStringTable(_ value: String?) -> [String: String] {
+        guard var value else { return [:] }
+        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.hasPrefix("{"), value.hasSuffix("}") else { return [:] }
+
+        var result: [String: String] = [:]
+        for item in splitCommaSeparated(String(value.dropFirst().dropLast())) {
+            guard let equals = firstUnquotedEquals(in: item) else { continue }
+            let key = String(item[..<equals]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let raw = String(item[item.index(after: equals)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { continue }
+            result[unquote(key)] = unquote(raw)
+        }
+        return result
+    }
+
+    static func updatingKeys(in lines: [String], values: [String: String?]) -> [String] {
+        var result = lines
+        var handled: Set<String> = []
+
+        for index in result.indices {
+            let trimmed = result[index].trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("#"),
+                  !trimmed.hasPrefix("["),
+                  let equals = firstUnquotedEquals(in: trimmed)
+            else { continue }
+            let key = String(trimmed[..<equals]).trimmingCharacters(in: .whitespaces)
+            guard let value = values[key] else { continue }
+            handled.insert(key)
+            result[index] = value.map { "\(key) = \($0)" } ?? ""
+        }
+
+        let additions = values.compactMap { key, value -> String? in
+            guard !handled.contains(key), let value else { return nil }
+            return "\(key) = \(value)"
+        }.sorted()
+
+        let headerIndex = result.firstIndex { $0.trimmingCharacters(in: .whitespaces).hasPrefix("[") }
+        let insertionIndex = headerIndex.map { result.index(after: $0) } ?? result.startIndex
+        result.insert(contentsOf: additions, at: insertionIndex)
+        return result.filter { !$0.isEmpty }
+    }
+
+    private static func splitCommaSeparated(_ text: String) -> [String] {
+        var result: [String] = []
+        var current = ""
+        var quote: Character?
+        var escaped = false
+
+        for character in text {
+            if escaped {
+                current.append(character)
+                escaped = false
+                continue
+            }
+            if character == "\\", quote == "\"" {
+                current.append(character)
+                escaped = true
+                continue
+            }
+            if character == "\"" || character == "'" {
+                if quote == character { quote = nil }
+                else if quote == nil { quote = character }
+                current.append(character)
+                continue
+            }
+            if character == ",", quote == nil {
+                let item = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !item.isEmpty { result.append(item) }
+                current = ""
+            } else {
+                current.append(character)
+            }
+        }
+
+        let item = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !item.isEmpty { result.append(item) }
+        return result
+    }
+
+    private static func firstUnquotedEquals(in text: String) -> String.Index? {
+        var quote: Character?
+        var escaped = false
+        for index in text.indices {
+            let character = text[index]
+            if escaped { escaped = false; continue }
+            if character == "\\", quote == "\"" { escaped = true; continue }
+            if character == "\"" || character == "'" {
+                if quote == character { quote = nil }
+                else if quote == nil { quote = character }
+            } else if character == "=", quote == nil {
+                return index
+            }
+        }
+        return nil
+    }
 }

@@ -3,13 +3,29 @@ set -euo pipefail
 
 APP_NAME="CodexLauncher"
 BUNDLE_ID="com.pixionfilm.CodexLauncher"
+APP_VERSION="$(tr -d '[:space:]' < VERSION)"
 DIST_DIR="dist"
 BUNDLE_PATH="$DIST_DIR/$APP_NAME.app"
-EXECUTABLE_PATH=".build/debug/$APP_NAME"
+BUILD_CONFIGURATION="debug"
+OPEN_APP=true
+
+for argument in "$@"; do
+  if [[ "$argument" == "--release" ]]; then
+    BUILD_CONFIGURATION="release"
+  elif [[ "$argument" == "--no-open" ]]; then
+    OPEN_APP=false
+  fi
+done
+
+EXECUTABLE_PATH=".build/$BUILD_CONFIGURATION/$APP_NAME"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
-swift build
+if [[ "$BUILD_CONFIGURATION" == "release" ]]; then
+  swift build -c release
+else
+  swift build
+fi
 
 rm -rf "$BUNDLE_PATH"
 mkdir -p "$BUNDLE_PATH/Contents/MacOS" "$BUNDLE_PATH/Contents/Resources"
@@ -28,6 +44,12 @@ cat > "$BUNDLE_PATH/Contents/Info.plist" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$APP_VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$APP_VERSION</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundlePackageType</key>
@@ -40,9 +62,13 @@ cat > "$BUNDLE_PATH/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-/usr/bin/open -n "$BUNDLE_PATH"
+codesign --force --deep --sign - "$BUNDLE_PATH"
 
-if [[ "${1:-}" == "--verify" ]]; then
+if [[ "$OPEN_APP" == true ]]; then
+  /usr/bin/open -n "$BUNDLE_PATH"
+fi
+
+if [[ " $* " == *" --verify "* ]]; then
   sleep 1
   pgrep -x "$APP_NAME" >/dev/null
   echo "$APP_NAME is running"

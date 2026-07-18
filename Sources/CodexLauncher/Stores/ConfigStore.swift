@@ -21,16 +21,22 @@ final class ConfigStore: ObservableObject {
     private var didNormalizeProviderWireAPIs = false
     private var didNormalizeProviderBaseURLs = false
     private var didNormalizeProviderEnvKeys = false
+    private var providerSourceIDs: [String: String] = [:]
     private let fileManager = FileManager.default
+    private let configURLOverride: URL?
+    private let launcherStateURLOverride: URL?
+    private let providerTokenStoreURL: URL
 
     var configURL: URL {
-        fileManager.homeDirectoryForCurrentUser
+        if let configURLOverride { return configURLOverride }
+        return fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex")
             .appendingPathComponent("config.toml")
     }
 
     var launcherStateURL: URL {
-        fileManager.homeDirectoryForCurrentUser
+        if let launcherStateURLOverride { return launcherStateURLOverride }
+        return fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex")
             .appendingPathComponent("codex-launcher-state.json")
     }
@@ -63,7 +69,14 @@ final class ConfigStore: ObservableObject {
         selectedProviderRouteID != nil
     }
 
-    init() {
+    init(
+        configURL: URL? = nil,
+        launcherStateURL: URL? = nil,
+        providerTokenStoreURL: URL = ProviderTokenStore.defaultStoreURL
+    ) {
+        configURLOverride = configURL
+        launcherStateURLOverride = launcherStateURL
+        self.providerTokenStoreURL = providerTokenStoreURL
         reload()
     }
 
@@ -206,6 +219,7 @@ final class ConfigStore: ObservableObject {
 
     func deleteProvider(id: String) {
         providers.removeValue(forKey: id)
+        providerSourceIDs.removeValue(forKey: id)
         profiles = profiles.map { profile in
             guard profile.modelProvider == id else { return profile }
             var updated = profile
@@ -267,26 +281,41 @@ final class ConfigStore: ObservableObject {
             return
         }
 
-        providers.removeValue(forKey: providerDraft.originalID)
+        let sourceID = providerSourceIDs.removeValue(forKey: providerDraft.originalID) ?? providerDraft.originalID
+        let previousProvider = providers.removeValue(forKey: providerDraft.originalID)
         let cleanToken = providerDraft.token.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanEnvKey = normalizedEnvKey(providerDraft.envKey, providerID: cleanID, hasToken: !cleanToken.isEmpty)
+        let usesCommandAuth = providerDraft.authMode == .command
+        let cleanEnvKey = usesCommandAuth ? "" : normalizedEnvKey(providerDraft.envKey, providerID: cleanID, hasToken: !cleanToken.isEmpty)
+        let authArgs = providerDraft.authArgs
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
 
         providers[cleanID] = ModelProviderEntry(
             id: cleanID,
             name: providerDraft.name,
             baseURL: normalizedBaseURL(providerDraft.baseURL),
             envKey: cleanEnvKey,
-            wireAPI: providerDraft.wireAPI
+            wireAPI: providerDraft.wireAPI,
+            authCommand: usesCommandAuth ? providerDraft.authCommand.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+            authArgs: usesCommandAuth ? authArgs : [],
+            authCwd: usesCommandAuth ? providerDraft.authCwd.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+            authTimeoutMS: usesCommandAuth ? Int(providerDraft.authTimeoutMS.trimmingCharacters(in: .whitespacesAndNewlines)) : nil,
+            authRefreshIntervalMS: usesCommandAuth ? Int(providerDraft.authRefreshIntervalMS.trimmingCharacters(in: .whitespacesAndNewlines)) : nil,
+            queryParams: previousProvider?.queryParams ?? [:],
+            httpHeaders: previousProvider?.httpHeaders ?? [:],
+            envHTTPHeaders: previousProvider?.envHTTPHeaders ?? [:]
         )
+        providerSourceIDs[cleanID] = sourceID
 
         do {
             if cleanID != providerDraft.originalID {
-                try ProviderTokenStore.delete(providerID: providerDraft.originalID)
+                try ProviderTokenStore.delete(providerID: providerDraft.originalID, storeURL: providerTokenStoreURL)
             }
-            if cleanToken.isEmpty {
-                try ProviderTokenStore.delete(providerID: cleanID)
+            if cleanToken.isEmpty || usesCommandAuth {
+                try ProviderTokenStore.delete(providerID: cleanID, storeURL: providerTokenStoreURL)
             } else {
-                try ProviderTokenStore.save(cleanToken, providerID: cleanID)
+                try ProviderTokenStore.save(cleanToken, providerID: cleanID, storeURL: providerTokenStoreURL)
             }
         } catch {
             errorMessage = "保存 token 失败：\(error.localizedDescription)"
@@ -333,7 +362,11 @@ final class ConfigStore: ObservableObject {
     }
 
     func tokenForProvider(_ providerID: String) -> String {
-        ProviderTokenStore.load(providerID: providerID) ?? ""
+        ProviderTokenStore.load(providerID: providerID, storeURL: providerTokenStoreURL) ?? ""
+    }
+
+    func providerForDiscovery(_ providerID: String) -> ModelProviderEntry? {
+        providers[providerID]
     }
 
     func cancelPendingLaunch() {
@@ -385,8 +418,12 @@ final class ConfigStore: ObservableObject {
         didNormalizeProviderWireAPIs = false
         didNormalizeProviderBaseURLs = false
         didNormalizeProviderEnvKeys = false
+        providerSourceIDs = [:]
 
-        for section in TOMLSupport.splitSections(text) {
+        let sections = TOMLSupport.splitSections(text)
+        let sectionNames = Set(sections.compactMap(\.name))
+
+        for section in sections {
             guard let name = section.name else { continue }
             let values = TOMLSupport.keyValues(in: section.lines)
 
@@ -399,8 +436,9 @@ final class ConfigStore: ObservableObject {
                     modelProvider: values["model_provider"] ?? "",
                     modelCatalogJSON: values["model_catalog_json"] ?? ""
                 ))
-            } else if name.hasPrefix("model_providers.") {
-                let id = String(name.dropFirst("model_providers.".count))
+            } else if let id = providerRootID(for: name, sectionNames: sectionNames) {
+                let authValues = sections.first(where: { $0.name == "model_providers.\(id).auth" })
+                    .map { TOMLSupport.keyValues(in: $0.lines) } ?? [:]
                 let rawWireAPI = values["wire_api"] ?? ""
                 let wireAPI = normalizedWireAPI(rawWireAPI)
                 if rawWireAPI != wireAPI {
@@ -412,7 +450,10 @@ final class ConfigStore: ObservableObject {
                     didNormalizeProviderBaseURLs = true
                 }
                 let rawEnvKey = values["env_key"] ?? ""
-                let envKey = normalizedEnvKey(rawEnvKey, providerID: id, hasToken: ProviderTokenStore.load(providerID: id)?.isEmpty == false)
+                let usesCommandAuth = authValues["command"]?.isEmpty == false
+                let envKey = usesCommandAuth
+                    ? ""
+                    : normalizedEnvKey(rawEnvKey, providerID: id, hasToken: ProviderTokenStore.load(providerID: id, storeURL: providerTokenStoreURL)?.isEmpty == false)
                 if rawEnvKey != envKey {
                     didNormalizeProviderEnvKeys = true
                 }
@@ -421,13 +462,23 @@ final class ConfigStore: ObservableObject {
                     name: values["name"] ?? "",
                     baseURL: baseURL,
                     envKey: envKey,
-                    wireAPI: wireAPI
+                    wireAPI: wireAPI,
+                    authCommand: authValues["command"] ?? "",
+                    authArgs: TOMLSupport.stringArray(authValues["args"]),
+                    authCwd: authValues["cwd"] ?? "",
+                    authTimeoutMS: authValues["timeout_ms"].flatMap(Int.init),
+                    authRefreshIntervalMS: authValues["refresh_interval_ms"].flatMap(Int.init),
+                    queryParams: TOMLSupport.inlineStringTable(values["query_params"]),
+                    httpHeaders: TOMLSupport.inlineStringTable(values["http_headers"]),
+                    envHTTPHeaders: TOMLSupport.inlineStringTable(values["env_http_headers"])
                 )
+                providerSourceIDs[id] = id
             }
         }
 
         if parsedProviders.isEmpty {
             parsedProviders = loadProvidersFromRecentBackups()
+            providerSourceIDs = Dictionary(uniqueKeysWithValues: parsedProviders.keys.map { ($0, $0) })
         }
 
         didImportLegacyProfiles = stateProfiles.isEmpty && parsedProfiles.isEmpty == false
@@ -464,7 +515,7 @@ final class ConfigStore: ObservableObject {
             return
         }
 
-        let token = ProviderTokenStore.load(providerID: provider.id) ?? ""
+        let token = ProviderTokenStore.load(providerID: provider.id, storeURL: providerTokenStoreURL) ?? ""
         providerDraft = ProviderDraft(provider: provider, token: token, hasStoredToken: !token.isEmpty)
     }
 
@@ -524,7 +575,20 @@ final class ConfigStore: ObservableObject {
         }
         let cleanToken = providerDraft.token.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanEnvKey = providerDraft.envKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !cleanToken.isEmpty && cleanEnvKey.isEmpty {
+        if providerDraft.authMode == .command {
+            if providerDraft.authCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                warnings.append("Command auth 需要填写 command。")
+            }
+            if !cleanEnvKey.isEmpty || !cleanToken.isEmpty {
+                warnings.append("Command auth 保存时不会使用 env_key 或本地静态 token。")
+            }
+            for (label, value) in [("timeout_ms", providerDraft.authTimeoutMS), ("refresh_interval_ms", providerDraft.authRefreshIntervalMS)] {
+                let cleanValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cleanValue.isEmpty, Int(cleanValue) == nil {
+                    warnings.append("\(label) 必须是整数。")
+                }
+            }
+        } else if !cleanToken.isEmpty && cleanEnvKey.isEmpty {
             warnings.append("已保存 token 但 env_key 为空，保存时会自动写入：\(defaultEnvKey(for: providerDraft.id))")
         }
 
@@ -561,6 +625,8 @@ final class ConfigStore: ObservableObject {
         appendChange("name", before?.name, providerDraft.name, to: &lines)
         appendChange("base_url", before?.baseURL, providerDraft.baseURL, to: &lines)
         appendChange("env_key", before?.envKey, providerDraft.envKey, to: &lines)
+        appendChange("auth_mode", before?.authCommand.isEmpty == false ? ProviderAuthMode.command.rawValue : ProviderAuthMode.environment.rawValue, providerDraft.authMode.rawValue, to: &lines)
+        appendChange("auth.command", before?.authCommand, providerDraft.authCommand, to: &lines)
         appendChange("wire_api", before?.wireAPI, providerDraft.wireAPI, to: &lines)
         lines.append("default catalog: \(defaultCatalogPath(for: providerDraft.id))")
 
@@ -578,8 +644,9 @@ final class ConfigStore: ObservableObject {
         guard let profile = profiles.first(where: { $0.id == profileID }),
               let provider = providers[profile.modelProvider]
         else { return [:] }
+        guard provider.authCommand.isEmpty else { return [:] }
 
-        let token = ProviderTokenStore.load(providerID: provider.id) ?? ""
+        let token = ProviderTokenStore.load(providerID: provider.id, storeURL: providerTokenStoreURL) ?? ""
         let envKey = effectiveEnvKey(for: provider, forceDefault: !token.isEmpty)
         guard envKey.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else {
             return [:]
@@ -596,6 +663,7 @@ final class ConfigStore: ObservableObject {
         try backupFile(at: configURL)
         try text.write(to: configURL, atomically: true, encoding: .utf8)
         originalText = text
+        providerSourceIDs = Dictionary(uniqueKeysWithValues: providers.keys.map { ($0, $0) })
     }
 
     private func buildConfigText(activeProfileID: String?, clearActiveSettings: Bool) -> String {
@@ -662,17 +730,79 @@ final class ConfigStore: ObservableObject {
             profiles.first(where: { $0.id == profileID })?.modelProvider
         }
 
+        let originalSections = TOMLSupport.splitSections(originalText)
+
         return providers.keys.sorted().compactMap { key -> String? in
             guard let provider = providers[key] else { return nil }
-            var lines = ["[model_providers.\(key)]"]
-            if !provider.name.isEmpty { lines.append("name = \(TOMLSupport.quoted(provider.name))") }
-            if !provider.baseURL.isEmpty { lines.append("base_url = \(TOMLSupport.quoted(provider.baseURL))") }
-            let envKey = effectiveEnvKey(for: provider, forceDefault: activeProviderID == key)
-            if !envKey.isEmpty { lines.append("env_key = \(TOMLSupport.quoted(envKey))") }
-            if !provider.wireAPI.isEmpty { lines.append("wire_api = \(TOMLSupport.quoted(provider.wireAPI))") }
-            return lines.joined(separator: "\n")
+            let sourceID = providerSourceIDs[key] ?? key
+            let sourceRootName = "model_providers.\(sourceID)"
+            let targetRootName = "model_providers.\(key)"
+            let usesCommandAuth = !provider.authCommand.isEmpty
+            let envKey = usesCommandAuth ? "" : effectiveEnvKey(for: provider, forceDefault: activeProviderID == key)
+
+            var rootLines = originalSections.first(where: { $0.name == sourceRootName })?.lines
+                ?? ["[\(targetRootName)]"]
+            rootLines = renamedSectionHeader(in: rootLines, from: sourceRootName, to: targetRootName)
+            var rootUpdates: [String: String?] = [
+                "name": provider.name.isEmpty ? nil : TOMLSupport.quoted(provider.name),
+                "base_url": provider.baseURL.isEmpty ? nil : TOMLSupport.quoted(provider.baseURL),
+                "env_key": envKey.isEmpty ? nil : TOMLSupport.quoted(envKey),
+                "wire_api": provider.wireAPI.isEmpty ? nil : TOMLSupport.quoted(provider.wireAPI)
+            ]
+            if usesCommandAuth {
+                rootUpdates.updateValue(nil, forKey: "experimental_bearer_token")
+                rootUpdates.updateValue(nil, forKey: "requires_openai_auth")
+            }
+            rootLines = TOMLSupport.updatingKeys(in: rootLines, values: rootUpdates)
+
+            var chunks = [trimTrailingBlankLines(rootLines).joined(separator: "\n")]
+            let childPrefix = sourceRootName + "."
+            for section in originalSections where section.name?.hasPrefix(childPrefix) == true {
+                guard let sectionName = section.name else { continue }
+                if sectionName == sourceRootName + ".auth" { continue }
+                let suffix = String(sectionName.dropFirst(sourceRootName.count))
+                let targetName = targetRootName + suffix
+                let lines = renamedSectionHeader(in: section.lines, from: sectionName, to: targetName)
+                chunks.append(trimTrailingBlankLines(lines).joined(separator: "\n"))
+            }
+
+            if usesCommandAuth {
+                let sourceAuthName = sourceRootName + ".auth"
+                let targetAuthName = targetRootName + ".auth"
+                var authLines = originalSections.first(where: { $0.name == sourceAuthName })?.lines
+                    ?? ["[\(targetAuthName)]"]
+                authLines = renamedSectionHeader(in: authLines, from: sourceAuthName, to: targetAuthName)
+                authLines = TOMLSupport.updatingKeys(in: authLines, values: [
+                    "command": TOMLSupport.quoted(provider.authCommand),
+                    "args": provider.authArgs.isEmpty ? nil : TOMLSupport.quotedArray(provider.authArgs),
+                    "cwd": provider.authCwd.isEmpty ? nil : TOMLSupport.quoted(provider.authCwd),
+                    "timeout_ms": provider.authTimeoutMS.map(String.init),
+                    "refresh_interval_ms": provider.authRefreshIntervalMS.map(String.init)
+                ])
+                chunks.append(trimTrailingBlankLines(authLines).joined(separator: "\n"))
+            }
+
+            return chunks.filter { !$0.isEmpty }.joined(separator: "\n\n")
         }
         .joined(separator: "\n\n")
+    }
+
+    private func providerRootID(for sectionName: String, sectionNames: Set<String>) -> String? {
+        let prefix = "model_providers."
+        guard sectionName.hasPrefix(prefix) else { return nil }
+        let remainder = String(sectionName.dropFirst(prefix.count))
+        for index in remainder.indices where remainder[index] == "." {
+            let parent = prefix + String(remainder[..<index])
+            if sectionNames.contains(parent) { return nil }
+        }
+        return remainder
+    }
+
+    private func renamedSectionHeader(in lines: [String], from oldName: String, to newName: String) -> [String] {
+        guard oldName != newName else { return lines }
+        return lines.map { line in
+            line.trimmingCharacters(in: .whitespaces) == "[\(oldName)]" ? "[\(newName)]" : line
+        }
     }
 
     private func loadLauncherProfiles() -> [ProfileEntry] {
@@ -752,9 +882,9 @@ final class ConfigStore: ObservableObject {
     }
 
     private func loadProvidersFromRecentBackups() -> [String: ModelProviderEntry] {
-        let backupDirectory = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex")
-            .appendingPathComponent("backups")
+        let backupDirectory = configURLOverride == nil
+            ? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/backups")
+            : configURL.deletingLastPathComponent().appendingPathComponent("backups")
 
         guard let files = try? fileManager.contentsOfDirectory(
             at: backupDirectory,
@@ -784,19 +914,29 @@ final class ConfigStore: ObservableObject {
 
     private func providerEntries(in text: String) -> [String: ModelProviderEntry] {
         var parsedProviders: [String: ModelProviderEntry] = [:]
-        for section in TOMLSupport.splitSections(text) {
+        let sections = TOMLSupport.splitSections(text)
+        let sectionNames = Set(sections.compactMap(\.name))
+        for section in sections {
             guard let name = section.name,
-                  name.hasPrefix("model_providers.")
+                  let id = providerRootID(for: name, sectionNames: sectionNames)
             else { continue }
-
-            let id = String(name.dropFirst("model_providers.".count))
             let values = TOMLSupport.keyValues(in: section.lines)
+            let authValues = sections.first(where: { $0.name == "model_providers.\(id).auth" })
+                .map { TOMLSupport.keyValues(in: $0.lines) } ?? [:]
             parsedProviders[id] = ModelProviderEntry(
                 id: id,
                 name: values["name"] ?? "",
                 baseURL: normalizedBaseURL(values["base_url"]),
                 envKey: values["env_key"] ?? "",
-                wireAPI: normalizedWireAPI(values["wire_api"])
+                wireAPI: normalizedWireAPI(values["wire_api"]),
+                authCommand: authValues["command"] ?? "",
+                authArgs: TOMLSupport.stringArray(authValues["args"]),
+                authCwd: authValues["cwd"] ?? "",
+                authTimeoutMS: authValues["timeout_ms"].flatMap(Int.init),
+                authRefreshIntervalMS: authValues["refresh_interval_ms"].flatMap(Int.init),
+                queryParams: TOMLSupport.inlineStringTable(values["query_params"]),
+                httpHeaders: TOMLSupport.inlineStringTable(values["http_headers"]),
+                envHTTPHeaders: TOMLSupport.inlineStringTable(values["env_http_headers"])
             )
         }
         return parsedProviders
@@ -846,9 +986,9 @@ final class ConfigStore: ObservableObject {
             return
         }
 
-        let backupDirectory = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex")
-            .appendingPathComponent("backups")
+        let backupDirectory = configURLOverride == nil
+            ? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/backups")
+            : url.deletingLastPathComponent().appendingPathComponent("backups")
         try fileManager.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
 
         let timestamp = Self.backupTimestampFormatter.string(from: now)

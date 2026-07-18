@@ -14,6 +14,51 @@ struct ModelProviderEntry: Identifiable, Hashable, Codable {
     var baseURL: String
     var envKey: String
     var wireAPI: String
+    var authCommand: String
+    var authArgs: [String]
+    var authCwd: String
+    var authTimeoutMS: Int?
+    var authRefreshIntervalMS: Int?
+    var queryParams: [String: String]
+    var httpHeaders: [String: String]
+    var envHTTPHeaders: [String: String]
+
+    init(
+        id: String,
+        name: String,
+        baseURL: String,
+        envKey: String,
+        wireAPI: String,
+        authCommand: String = "",
+        authArgs: [String] = [],
+        authCwd: String = "",
+        authTimeoutMS: Int? = nil,
+        authRefreshIntervalMS: Int? = nil,
+        queryParams: [String: String] = [:],
+        httpHeaders: [String: String] = [:],
+        envHTTPHeaders: [String: String] = [:]
+    ) {
+        self.id = id
+        self.name = name
+        self.baseURL = baseURL
+        self.envKey = envKey
+        self.wireAPI = wireAPI
+        self.authCommand = authCommand
+        self.authArgs = authArgs
+        self.authCwd = authCwd
+        self.authTimeoutMS = authTimeoutMS
+        self.authRefreshIntervalMS = authRefreshIntervalMS
+        self.queryParams = queryParams
+        self.httpHeaders = httpHeaders
+        self.envHTTPHeaders = envHTTPHeaders
+    }
+}
+
+enum ProviderAuthMode: String, CaseIterable, Identifiable {
+    case environment
+    case command
+
+    var id: String { rawValue }
 }
 
 struct LauncherState: Codable {
@@ -65,6 +110,12 @@ struct ProviderDraft: Equatable {
     var wireAPI: String
     var token: String
     var hasStoredToken: Bool
+    var authMode: ProviderAuthMode
+    var authCommand: String
+    var authArgs: String
+    var authCwd: String
+    var authTimeoutMS: String
+    var authRefreshIntervalMS: String
 }
 
 extension ProviderDraft {
@@ -77,5 +128,11 @@ extension ProviderDraft {
         wireAPI = provider.wireAPI
         self.token = token
         self.hasStoredToken = hasStoredToken
+        authMode = provider.authCommand.isEmpty ? .environment : .command
+        authCommand = provider.authCommand
+        authArgs = provider.authArgs.joined(separator: "\n")
+        authCwd = provider.authCwd
+        authTimeoutMS = provider.authTimeoutMS.map(String.init) ?? ""
+        authRefreshIntervalMS = provider.authRefreshIntervalMS.map(String.init) ?? ""
     }
 }

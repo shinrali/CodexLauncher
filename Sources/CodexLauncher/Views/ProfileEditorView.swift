@@ -85,7 +85,7 @@ struct ProfileEditorView: View {
         .onAppear { fetchModelsIfNeeded() }
         .onDisappear { fetchTask?.cancel() }
         .onChange(of: currentBaseURL) { _, _ in fetchModelsIfNeeded() }
-        .onChange(of: currentEnvKey) { _, _ in fetchModelsIfNeeded() }
+        .onChange(of: currentProviderFingerprint) { _, _ in fetchModelsIfNeeded() }
     }
 
     private func draftBinding(_ keyPath: WritableKeyPath<ProfileDraft, String>) -> Binding<String> {
@@ -103,8 +103,12 @@ struct ProfileEditorView: View {
         return store.draft?.openAIBaseURL ?? ""
     }
 
-    private var currentEnvKey: String {
-        store.providers[currentProviderID]?.envKey ?? ""
+    private var currentProvider: ModelProviderEntry? {
+        store.providerForDiscovery(currentProviderID)
+    }
+
+    private var currentProviderFingerprint: String {
+        currentProvider.map(String.init(describing:)) ?? ""
     }
 
     private var currentProviderID: String {
@@ -125,24 +129,24 @@ struct ProfileEditorView: View {
     private func fetchModelsIfNeeded() {
         fetchTask?.cancel()
         let baseURL = currentBaseURL
-        let envKey = currentEnvKey
-        let providerID = currentProviderID
         let token = currentToken
+        guard var provider = currentProvider else { return }
+        provider.baseURL = baseURL
         fetchTask = Task {
             try? await Task.sleep(for: .milliseconds(450))
             guard !Task.isCancelled else { return }
-            await discoveryStore.fetchIfNeeded(baseURL: baseURL, envKey: envKey, providerID: providerID, tokenOverride: token)
+            await discoveryStore.fetchIfNeeded(provider: provider, tokenOverride: token)
         }
     }
 
     private func fetchModels() {
         fetchTask?.cancel()
         let baseURL = currentBaseURL
-        let envKey = currentEnvKey
-        let providerID = currentProviderID
         let token = currentToken
+        guard var provider = currentProvider else { return }
+        provider.baseURL = baseURL
         fetchTask = Task {
-            await discoveryStore.fetch(baseURL: baseURL, envKey: envKey, providerID: providerID, tokenOverride: token)
+            await discoveryStore.fetch(provider: provider, tokenOverride: token)
         }
     }
 
