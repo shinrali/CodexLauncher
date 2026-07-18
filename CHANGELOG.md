@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.4 - 2026-07-18
 
 - Show the current version in the macOS About window and bundle metadata.
 - Add command-backed bearer token authentication for custom model providers.
