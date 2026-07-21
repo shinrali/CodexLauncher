@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.5 - 2026-07-21
+
+- Deliver locally stored provider tokens through Codex command authentication instead of relying on ChatGPT.app to inherit launch environment variables.
+- Install a private token helper under Application Support and automatically migrate existing `env_key` providers that already have a locally stored token.
+- Separate provider authentication into Local Token, Environment, and Command modes.
+- Distribute releases as a drag-to-Applications DMG.
+
 ## v0.1.4 - 2026-07-18
 
 - Show the current version in the macOS About window and bundle metadata.

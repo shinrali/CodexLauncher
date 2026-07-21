@@ -37,7 +37,8 @@ struct ProviderEditorView: View {
 
                 DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
                     Picker("Authentication", selection: authModeBinding) {
-                        Text("Environment / Local File").tag(ProviderAuthMode.environment)
+                        Text("Local Token").tag(ProviderAuthMode.localFile)
+                        Text("Environment").tag(ProviderAuthMode.environment)
                         Text("Command").tag(ProviderAuthMode.command)
                     }
                     .pickerStyle(.segmented)
@@ -79,12 +80,7 @@ struct ProviderEditorView: View {
                         Text("Codex 执行 command 并从 stdout 读取 bearer token；不要同时配置 env_key。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    } else {
-                        TextField("env_key (optional)", text: draftBinding(\.envKey))
-                            .fontDesign(.monospaced)
-                            .textFieldStyle(.roundedBorder)
-                            .editableSurface()
-
+                    } else if store.providerDraft?.authMode == .localFile {
                         HStack(spacing: 8) {
                             if revealToken {
                                 TextField("token", text: draftBinding(\.token))
@@ -116,7 +112,16 @@ struct ProviderEditorView: View {
                             .help("清空 token")
                         }
 
-                        Text("token 存到 CodexLauncher 自己的本地 secrets JSON，不会使用 Keychain。env_key 可留空；保存 token 时会自动生成并写入 config.toml。")
+                        Text("推荐模式。token 保存在 CodexLauncher 自己的本地 secrets JSON，不使用 Keychain；Codex 通过本地 helper 按需读取，不再依赖 ChatGPT.app 继承环境变量。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        TextField("env_key (optional)", text: draftBinding(\.envKey))
+                            .fontDesign(.monospaced)
+                            .textFieldStyle(.roundedBorder)
+                            .editableSurface()
+
+                        Text("仅保存环境变量名，不保存 token；无需认证的 provider 可留空。需要认证时，请确保变量存在于 ChatGPT.app 的运行环境中。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -152,7 +157,7 @@ struct ProviderEditorView: View {
 
     private var authModeBinding: Binding<ProviderAuthMode> {
         Binding {
-            store.providerDraft?.authMode ?? .environment
+            store.providerDraft?.authMode ?? .localFile
         } set: { newValue in
             store.providerDraft?.authMode = newValue
         }

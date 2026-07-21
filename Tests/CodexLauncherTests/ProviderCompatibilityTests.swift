@@ -22,6 +22,60 @@ struct ProviderCompatibilityTests {
         #expect(ProviderTokenStore.load(providerID: "proxy", storeURL: storeURL) == nil)
     }
 
+    @Test func installsPrivateManagedTokenHelper() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storeURL = directory.appendingPathComponent("CodexLauncher/provider-secrets.json")
+        let sourceURL = directory.appendingPathComponent("source-helper")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("helper-binary".utf8).write(to: sourceURL)
+        try ProviderTokenStore.installHelper(sourceURL: sourceURL, storeURL: storeURL)
+
+        let helperURL = ProviderTokenStore.helperURL(storeURL: storeURL)
+        #expect(try Data(contentsOf: helperURL) == Data("helper-binary".utf8))
+        let helperAttributes = try FileManager.default.attributesOfItem(atPath: helperURL.path)
+        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: helperURL.deletingLastPathComponent().path)
+        #expect((helperAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
+        #expect((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
+    }
+
+    @Test func migratesStoredTokenFromEnvironmentInjectionToCommandAuth() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let configURL = directory.appendingPathComponent("config.toml")
+        let stateURL = directory.appendingPathComponent("launcher-state.json")
+        let storeURL = directory.appendingPathComponent("Application Support/CodexLauncher/provider-secrets.json")
+        try """
+        [model_providers.Ficus]
+        name = "Ficus"
+        base_url = "https://agent.example.com/v1"
+        env_key = "ANTHROPIC_AUTH_TOKEN"
+        wire_api = "responses"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+        try ProviderTokenStore.save("same-valid-token", providerID: "Ficus", storeURL: storeURL)
+
+        let store = ConfigStore(
+            configURL: configURL,
+            launcherStateURL: stateURL,
+            providerTokenStoreURL: storeURL
+        )
+
+        #expect(store.providers["Ficus"]?.usesManagedTokenHelper == true)
+        #expect(store.providers["Ficus"]?.envKey == "")
+        let saved = try String(contentsOf: configURL, encoding: .utf8)
+        #expect(!saved.contains("env_key"))
+        #expect(saved.contains("[model_providers.Ficus.auth]"))
+        #expect(saved.contains("command = \"\(ProviderTokenStore.helperURL(storeURL: storeURL).path)\""))
+        #expect(saved.contains("args = [\"--print-provider-token\", \"Ficus\"]"))
+        #expect(saved.contains("refresh_interval_ms = 0"))
+        #expect(ProviderTokenStore.load(providerID: "Ficus", storeURL: storeURL) == "same-valid-token")
+    }
+
     @Test func commandAuthIsUsedForModelDiscovery() async throws {
         let capture = RequestCapture()
         MockURLProtocol.handler = { request in

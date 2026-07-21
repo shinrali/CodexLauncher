@@ -14,6 +14,7 @@ struct ModelProviderEntry: Identifiable, Hashable, Codable {
     var baseURL: String
     var envKey: String
     var wireAPI: String
+    var usesManagedTokenHelper: Bool
     var authCommand: String
     var authArgs: [String]
     var authCwd: String
@@ -29,6 +30,7 @@ struct ModelProviderEntry: Identifiable, Hashable, Codable {
         baseURL: String,
         envKey: String,
         wireAPI: String,
+        usesManagedTokenHelper: Bool = false,
         authCommand: String = "",
         authArgs: [String] = [],
         authCwd: String = "",
@@ -43,6 +45,7 @@ struct ModelProviderEntry: Identifiable, Hashable, Codable {
         self.baseURL = baseURL
         self.envKey = envKey
         self.wireAPI = wireAPI
+        self.usesManagedTokenHelper = usesManagedTokenHelper
         self.authCommand = authCommand
         self.authArgs = authArgs
         self.authCwd = authCwd
@@ -55,6 +58,7 @@ struct ModelProviderEntry: Identifiable, Hashable, Codable {
 }
 
 enum ProviderAuthMode: String, CaseIterable, Identifiable {
+    case localFile
     case environment
     case command
 
@@ -128,7 +132,11 @@ extension ProviderDraft {
         wireAPI = provider.wireAPI
         self.token = token
         self.hasStoredToken = hasStoredToken
-        authMode = provider.authCommand.isEmpty ? .environment : .command
+        if provider.usesManagedTokenHelper {
+            authMode = .localFile
+        } else {
+            authMode = provider.authCommand.isEmpty ? .environment : .command
+        }
         authCommand = provider.authCommand
         authArgs = provider.authArgs.joined(separator: "\n")
         authCwd = provider.authCwd

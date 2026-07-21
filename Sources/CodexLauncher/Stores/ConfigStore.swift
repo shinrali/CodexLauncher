@@ -21,6 +21,7 @@ final class ConfigStore: ObservableObject {
     private var didNormalizeProviderWireAPIs = false
     private var didNormalizeProviderBaseURLs = false
     private var didNormalizeProviderEnvKeys = false
+    private var didNormalizeManagedTokenAuth = false
     private var providerSourceIDs: [String: String] = [:]
     private let fileManager = FileManager.default
     private let configURLOverride: URL?
@@ -87,7 +88,10 @@ final class ConfigStore: ObservableObject {
             if didImportLegacyProfiles {
                 try writeLauncherState()
             }
-            if didImportLegacyProfiles || didNormalizeProviderWireAPIs || didNormalizeProviderBaseURLs || didNormalizeProviderEnvKeys {
+            if providers.values.contains(where: \.usesManagedTokenHelper), configURLOverride == nil {
+                try ProviderTokenStore.installHelper(storeURL: providerTokenStoreURL)
+            }
+            if didImportLegacyProfiles || didNormalizeProviderWireAPIs || didNormalizeProviderBaseURLs || didNormalizeProviderEnvKeys || didNormalizeManagedTokenAuth {
                 try writeConfig(activeProfileID: nil, clearActiveSettings: false)
             }
             if selectedProfileID == nil ||
@@ -162,7 +166,14 @@ final class ConfigStore: ObservableObject {
             defaultProviderID = existingProviderID
         } else {
             let providerID = "local-provider"
-            providers[providerID] = ModelProviderEntry(id: providerID, name: providerID, baseURL: "", envKey: "", wireAPI: "responses")
+            providers[providerID] = ModelProviderEntry(
+                id: providerID,
+                name: providerID,
+                baseURL: "",
+                envKey: "",
+                wireAPI: "responses",
+                usesManagedTokenHelper: true
+            )
             selectedProviderID = providerID
             defaultProviderID = providerID
         }
@@ -206,7 +217,14 @@ final class ConfigStore: ObservableObject {
             suffix += 1
         }
 
-        providers[nextName] = ModelProviderEntry(id: nextName, name: nextName, baseURL: "", envKey: "", wireAPI: "responses")
+        providers[nextName] = ModelProviderEntry(
+            id: nextName,
+            name: nextName,
+            baseURL: "",
+            envKey: "",
+            wireAPI: "responses",
+            usesManagedTokenHelper: true
+        )
         selectProviderRoute(nextName)
         refreshProviderDraft()
         save()
@@ -284,8 +302,11 @@ final class ConfigStore: ObservableObject {
         let sourceID = providerSourceIDs.removeValue(forKey: providerDraft.originalID) ?? providerDraft.originalID
         let previousProvider = providers.removeValue(forKey: providerDraft.originalID)
         let cleanToken = providerDraft.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let usesManagedTokenHelper = providerDraft.authMode == .localFile
         let usesCommandAuth = providerDraft.authMode == .command
-        let cleanEnvKey = usesCommandAuth ? "" : normalizedEnvKey(providerDraft.envKey, providerID: cleanID, hasToken: !cleanToken.isEmpty)
+        let cleanEnvKey = providerDraft.authMode == .environment
+            ? providerDraft.envKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
         let authArgs = providerDraft.authArgs
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -297,6 +318,7 @@ final class ConfigStore: ObservableObject {
             baseURL: normalizedBaseURL(providerDraft.baseURL),
             envKey: cleanEnvKey,
             wireAPI: providerDraft.wireAPI,
+            usesManagedTokenHelper: usesManagedTokenHelper,
             authCommand: usesCommandAuth ? providerDraft.authCommand.trimmingCharacters(in: .whitespacesAndNewlines) : "",
             authArgs: usesCommandAuth ? authArgs : [],
             authCwd: usesCommandAuth ? providerDraft.authCwd.trimmingCharacters(in: .whitespacesAndNewlines) : "",
@@ -309,13 +331,16 @@ final class ConfigStore: ObservableObject {
         providerSourceIDs[cleanID] = sourceID
 
         do {
+            if usesManagedTokenHelper, configURLOverride == nil {
+                try ProviderTokenStore.installHelper(storeURL: providerTokenStoreURL)
+            }
             if cleanID != providerDraft.originalID {
                 try ProviderTokenStore.delete(providerID: providerDraft.originalID, storeURL: providerTokenStoreURL)
             }
-            if cleanToken.isEmpty || usesCommandAuth {
-                try ProviderTokenStore.delete(providerID: cleanID, storeURL: providerTokenStoreURL)
-            } else {
+            if usesManagedTokenHelper, !cleanToken.isEmpty {
                 try ProviderTokenStore.save(cleanToken, providerID: cleanID, storeURL: providerTokenStoreURL)
+            } else {
+                try ProviderTokenStore.delete(providerID: cleanID, storeURL: providerTokenStoreURL)
             }
         } catch {
             errorMessage = "保存 token 失败：\(error.localizedDescription)"
@@ -400,7 +425,7 @@ final class ConfigStore: ObservableObject {
                 try writeProfileOverlay(profileID: id)
                 try CodexAppLauncher.launch(
                     restartRunningApp: restartRunningApp,
-                    environment: launchEnvironment(profileID: id)
+                    environment: [:]
                 )
                 let appName = CodexAppLauncher.appDisplayName
                 statusMessage = restartRunningApp ? "已关闭并用 profile 启动 \(appName).app：\(id)" : "已写入当前 profile 配置并启动 \(appName).app：\(id)"
@@ -418,6 +443,7 @@ final class ConfigStore: ObservableObject {
         didNormalizeProviderWireAPIs = false
         didNormalizeProviderBaseURLs = false
         didNormalizeProviderEnvKeys = false
+        didNormalizeManagedTokenAuth = false
         providerSourceIDs = [:]
 
         let sections = TOMLSupport.splitSections(text)
@@ -450,12 +476,23 @@ final class ConfigStore: ObservableObject {
                     didNormalizeProviderBaseURLs = true
                 }
                 let rawEnvKey = values["env_key"] ?? ""
-                let usesCommandAuth = authValues["command"]?.isEmpty == false
-                let envKey = usesCommandAuth
-                    ? ""
-                    : normalizedEnvKey(rawEnvKey, providerID: id, hasToken: ProviderTokenStore.load(providerID: id, storeURL: providerTokenStoreURL)?.isEmpty == false)
+                let authCommand = authValues["command"] ?? ""
+                let authArgs = TOMLSupport.stringArray(authValues["args"])
+                let hasStoredToken = ProviderTokenStore.load(providerID: id, storeURL: providerTokenStoreURL)?.isEmpty == false
+                let isManagedHelper = ProviderTokenStore.isManagedHelper(
+                    command: authCommand,
+                    args: authArgs,
+                    providerID: id,
+                    storeURL: providerTokenStoreURL
+                )
+                let usesManagedTokenHelper = isManagedHelper || (authCommand.isEmpty && hasStoredToken)
+                let usesCommandAuth = !authCommand.isEmpty && !usesManagedTokenHelper
+                let envKey = (usesCommandAuth || usesManagedTokenHelper) ? "" : rawEnvKey.trimmingCharacters(in: .whitespacesAndNewlines)
                 if rawEnvKey != envKey {
                     didNormalizeProviderEnvKeys = true
+                }
+                if usesManagedTokenHelper && (!isManagedHelper || authCommand != ProviderTokenStore.helperURL(storeURL: providerTokenStoreURL).path) {
+                    didNormalizeManagedTokenAuth = true
                 }
                 parsedProviders[id] = ModelProviderEntry(
                     id: id,
@@ -463,11 +500,12 @@ final class ConfigStore: ObservableObject {
                     baseURL: baseURL,
                     envKey: envKey,
                     wireAPI: wireAPI,
-                    authCommand: authValues["command"] ?? "",
-                    authArgs: TOMLSupport.stringArray(authValues["args"]),
-                    authCwd: authValues["cwd"] ?? "",
-                    authTimeoutMS: authValues["timeout_ms"].flatMap(Int.init),
-                    authRefreshIntervalMS: authValues["refresh_interval_ms"].flatMap(Int.init),
+                    usesManagedTokenHelper: usesManagedTokenHelper,
+                    authCommand: usesCommandAuth ? authCommand : "",
+                    authArgs: usesCommandAuth ? authArgs : [],
+                    authCwd: usesCommandAuth ? authValues["cwd"] ?? "" : "",
+                    authTimeoutMS: usesCommandAuth ? authValues["timeout_ms"].flatMap(Int.init) : nil,
+                    authRefreshIntervalMS: usesCommandAuth ? authValues["refresh_interval_ms"].flatMap(Int.init) : nil,
                     queryParams: TOMLSupport.inlineStringTable(values["query_params"]),
                     httpHeaders: TOMLSupport.inlineStringTable(values["http_headers"]),
                     envHTTPHeaders: TOMLSupport.inlineStringTable(values["env_http_headers"])
@@ -588,8 +626,8 @@ final class ConfigStore: ObservableObject {
                     warnings.append("\(label) 必须是整数。")
                 }
             }
-        } else if !cleanToken.isEmpty && cleanEnvKey.isEmpty {
-            warnings.append("已保存 token 但 env_key 为空，保存时会自动写入：\(defaultEnvKey(for: providerDraft.id))")
+        } else if providerDraft.authMode == .localFile, cleanToken.isEmpty {
+            warnings.append("Local Token 模式需要填写 token。")
         }
 
         return warnings
@@ -625,7 +663,10 @@ final class ConfigStore: ObservableObject {
         appendChange("name", before?.name, providerDraft.name, to: &lines)
         appendChange("base_url", before?.baseURL, providerDraft.baseURL, to: &lines)
         appendChange("env_key", before?.envKey, providerDraft.envKey, to: &lines)
-        appendChange("auth_mode", before?.authCommand.isEmpty == false ? ProviderAuthMode.command.rawValue : ProviderAuthMode.environment.rawValue, providerDraft.authMode.rawValue, to: &lines)
+        let previousAuthMode: ProviderAuthMode = before?.usesManagedTokenHelper == true
+            ? .localFile
+            : (before?.authCommand.isEmpty == false ? .command : .environment)
+        appendChange("auth_mode", previousAuthMode.rawValue, providerDraft.authMode.rawValue, to: &lines)
         appendChange("auth.command", before?.authCommand, providerDraft.authCommand, to: &lines)
         appendChange("wire_api", before?.wireAPI, providerDraft.wireAPI, to: &lines)
         lines.append("default catalog: \(defaultCatalogPath(for: providerDraft.id))")
@@ -638,22 +679,6 @@ final class ConfigStore: ObservableObject {
         }
 
         return lines.joined(separator: "\n")
-    }
-
-    private func launchEnvironment(profileID: String) -> [String: String] {
-        guard let profile = profiles.first(where: { $0.id == profileID }),
-              let provider = providers[profile.modelProvider]
-        else { return [:] }
-        guard provider.authCommand.isEmpty else { return [:] }
-
-        let token = ProviderTokenStore.load(providerID: provider.id, storeURL: providerTokenStoreURL) ?? ""
-        let envKey = effectiveEnvKey(for: provider, forceDefault: !token.isEmpty)
-        guard envKey.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else {
-            return [:]
-        }
-
-        guard !token.isEmpty else { return [:] }
-        return [envKey: token]
     }
 
     private func writeConfig(activeProfileID: String?, clearActiveSettings: Bool = false) throws {
@@ -685,7 +710,7 @@ final class ConfigStore: ObservableObject {
         var chunks = preserved.map { trimTrailingBlankLines($0.lines).joined(separator: "\n") }
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
-        chunks.append(renderProviders(activeProfileID: activeProfileID))
+        chunks.append(renderProviders())
 
         return chunks
             .filter { !$0.isEmpty }
@@ -725,11 +750,7 @@ final class ConfigStore: ObservableObject {
         sections[rootIndex].lines = lines
     }
 
-    private func renderProviders(activeProfileID: String? = nil) -> String {
-        let activeProviderID = activeProfileID.flatMap { profileID in
-            profiles.first(where: { $0.id == profileID })?.modelProvider
-        }
-
+    private func renderProviders() -> String {
         let originalSections = TOMLSupport.splitSections(originalText)
 
         return providers.keys.sorted().compactMap { key -> String? in
@@ -737,8 +758,8 @@ final class ConfigStore: ObservableObject {
             let sourceID = providerSourceIDs[key] ?? key
             let sourceRootName = "model_providers.\(sourceID)"
             let targetRootName = "model_providers.\(key)"
-            let usesCommandAuth = !provider.authCommand.isEmpty
-            let envKey = usesCommandAuth ? "" : effectiveEnvKey(for: provider, forceDefault: activeProviderID == key)
+            let usesCommandAuth = provider.usesManagedTokenHelper || !provider.authCommand.isEmpty
+            let envKey = usesCommandAuth ? "" : provider.envKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
             var rootLines = originalSections.first(where: { $0.name == sourceRootName })?.lines
                 ?? ["[\(targetRootName)]"]
@@ -767,17 +788,23 @@ final class ConfigStore: ObservableObject {
             }
 
             if usesCommandAuth {
+                let command = provider.usesManagedTokenHelper
+                    ? ProviderTokenStore.helperURL(storeURL: providerTokenStoreURL).path
+                    : provider.authCommand
+                let args = provider.usesManagedTokenHelper
+                    ? ProviderTokenStore.helperArguments(providerID: provider.id)
+                    : provider.authArgs
                 let sourceAuthName = sourceRootName + ".auth"
                 let targetAuthName = targetRootName + ".auth"
                 var authLines = originalSections.first(where: { $0.name == sourceAuthName })?.lines
                     ?? ["[\(targetAuthName)]"]
                 authLines = renamedSectionHeader(in: authLines, from: sourceAuthName, to: targetAuthName)
                 authLines = TOMLSupport.updatingKeys(in: authLines, values: [
-                    "command": TOMLSupport.quoted(provider.authCommand),
-                    "args": provider.authArgs.isEmpty ? nil : TOMLSupport.quotedArray(provider.authArgs),
-                    "cwd": provider.authCwd.isEmpty ? nil : TOMLSupport.quoted(provider.authCwd),
-                    "timeout_ms": provider.authTimeoutMS.map(String.init),
-                    "refresh_interval_ms": provider.authRefreshIntervalMS.map(String.init)
+                    "command": TOMLSupport.quoted(command),
+                    "args": args.isEmpty ? nil : TOMLSupport.quotedArray(args),
+                    "cwd": provider.usesManagedTokenHelper || provider.authCwd.isEmpty ? nil : TOMLSupport.quoted(provider.authCwd),
+                    "timeout_ms": provider.usesManagedTokenHelper ? "5000" : provider.authTimeoutMS.map(String.init),
+                    "refresh_interval_ms": provider.usesManagedTokenHelper ? "0" : provider.authRefreshIntervalMS.map(String.init)
                 ])
                 chunks.append(trimTrailingBlankLines(authLines).joined(separator: "\n"))
             }
@@ -824,41 +851,6 @@ final class ConfigStore: ObservableObject {
     private func normalizedWireAPI(_ value: String?) -> String {
         let cleanValue = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return cleanValue == "responses" ? "responses" : "responses"
-    }
-
-    private func normalizedEnvKey(_ value: String?, providerID: String, hasToken: Bool) -> String {
-        let cleanValue = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard cleanValue.isEmpty, hasToken else { return cleanValue }
-        return defaultEnvKey(for: providerID)
-    }
-
-    private func effectiveEnvKey(for provider: ModelProviderEntry, forceDefault: Bool = false) -> String {
-        let cleanValue = provider.envKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard cleanValue.isEmpty, forceDefault else { return cleanValue }
-        return defaultEnvKey(for: provider.id)
-    }
-
-    private func defaultEnvKey(for providerID: String) -> String {
-        let characters = providerID.uppercased().unicodeScalars.map { scalar -> Character in
-            let value = scalar.value
-            if (65...90).contains(value) || (48...57).contains(value) || value == 95 {
-                return Character(scalar)
-            }
-            return "_"
-        }
-        var key = String(characters)
-            .split(separator: "_")
-            .joined(separator: "_")
-        if key.isEmpty {
-            key = "PROVIDER"
-        }
-        if key.first?.isNumber == true {
-            key = "PROVIDER_\(key)"
-        }
-        if !key.hasSuffix("_API_KEY") {
-            key += "_API_KEY"
-        }
-        return key
     }
 
     private func normalizedBaseURL(_ value: String?) -> String {
@@ -923,17 +915,26 @@ final class ConfigStore: ObservableObject {
             let values = TOMLSupport.keyValues(in: section.lines)
             let authValues = sections.first(where: { $0.name == "model_providers.\(id).auth" })
                 .map { TOMLSupport.keyValues(in: $0.lines) } ?? [:]
+            let authCommand = authValues["command"] ?? ""
+            let authArgs = TOMLSupport.stringArray(authValues["args"])
+            let usesManagedTokenHelper = ProviderTokenStore.isManagedHelper(
+                command: authCommand,
+                args: authArgs,
+                providerID: id,
+                storeURL: providerTokenStoreURL
+            )
             parsedProviders[id] = ModelProviderEntry(
                 id: id,
                 name: values["name"] ?? "",
                 baseURL: normalizedBaseURL(values["base_url"]),
                 envKey: values["env_key"] ?? "",
                 wireAPI: normalizedWireAPI(values["wire_api"]),
-                authCommand: authValues["command"] ?? "",
-                authArgs: TOMLSupport.stringArray(authValues["args"]),
-                authCwd: authValues["cwd"] ?? "",
-                authTimeoutMS: authValues["timeout_ms"].flatMap(Int.init),
-                authRefreshIntervalMS: authValues["refresh_interval_ms"].flatMap(Int.init),
+                usesManagedTokenHelper: usesManagedTokenHelper,
+                authCommand: usesManagedTokenHelper ? "" : authCommand,
+                authArgs: usesManagedTokenHelper ? [] : authArgs,
+                authCwd: usesManagedTokenHelper ? "" : authValues["cwd"] ?? "",
+                authTimeoutMS: usesManagedTokenHelper ? nil : authValues["timeout_ms"].flatMap(Int.init),
+                authRefreshIntervalMS: usesManagedTokenHelper ? nil : authValues["refresh_interval_ms"].flatMap(Int.init),
                 queryParams: TOMLSupport.inlineStringTable(values["query_params"]),
                 httpHeaders: TOMLSupport.inlineStringTable(values["http_headers"]),
                 envHTTPHeaders: TOMLSupport.inlineStringTable(values["env_http_headers"])

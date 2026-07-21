@@ -2,6 +2,7 @@ import Foundation
 
 enum ProviderTokenStore {
     private static let lock = NSLock()
+    static let helperArgument = "--print-provider-token"
 
     private struct Payload: Codable {
         var version = 1
@@ -12,6 +13,48 @@ enum ProviderTokenStore {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CodexLauncher", isDirectory: true)
             .appendingPathComponent("provider-secrets.json")
+    }
+
+    static func helperURL(storeURL: URL = defaultStoreURL) -> URL {
+        storeURL.deletingLastPathComponent()
+            .appendingPathComponent("bin", isDirectory: true)
+            .appendingPathComponent("CodexLauncherTokenHelper")
+    }
+
+    static func helperArguments(providerID: String) -> [String] {
+        [helperArgument, providerID]
+    }
+
+    static func isManagedHelper(
+        command: String,
+        args: [String],
+        providerID: String,
+        storeURL: URL = defaultStoreURL
+    ) -> Bool {
+        let commandURL = URL(fileURLWithPath: NSString(string: command).expandingTildeInPath)
+        return commandURL.lastPathComponent == helperURL(storeURL: storeURL).lastPathComponent
+            && args == helperArguments(providerID: providerID)
+    }
+
+    static func installHelper(
+        sourceURL: URL? = Bundle.main.executableURL,
+        storeURL: URL = defaultStoreURL
+    ) throws {
+        guard let sourceURL else {
+            throw CocoaError(.fileNoSuchFile, userInfo: [NSLocalizedDescriptionKey: "找不到 CodexLauncher 可执行文件。"])
+        }
+
+        let fileManager = FileManager.default
+        let destinationURL = helperURL(storeURL: storeURL)
+        let directory = destinationURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+
+        let sourceData = try Data(contentsOf: sourceURL)
+        if (try? Data(contentsOf: destinationURL)) != sourceData {
+            try sourceData.write(to: destinationURL, options: .atomic)
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: destinationURL.path)
     }
 
     static func load(providerID: String, storeURL: URL = defaultStoreURL) -> String? {

@@ -22,12 +22,12 @@ providers.
 
 ## Download
 
-Download the latest app bundle zip from GitHub Releases:
+Download the latest DMG from GitHub Releases:
 
 [CodexLauncher releases](https://github.com/shinrali/CodexLauncher/releases)
 
-After downloading, unzip `CodexLauncher-vX.Y.Z.zip` and run
-`CodexLauncher.app`.
+After downloading, open `CodexLauncher-vX.Y.Z.dmg`, then drag
+`CodexLauncher.app` onto the `Applications` folder shortcut.
 
 Because this app is not notarized yet, macOS may block the first launch. If that
 happens, open System Settings -> Privacy & Security and allow the app, or
@@ -125,9 +125,8 @@ A model provider describes how Codex connects to a backend:
 - `base_url`
   OpenAI-compatible API base URL, such as `http://localhost:11434/v1`.
 - `env_key`
-  Optional environment variable name used by Codex for the bearer token. If a
-  locally stored token exists and `env_key` is blank, CodexLauncher generates one from
-  the provider id, such as `OMLX_API_KEY` for `oMLX`.
+  Environment variable name used only when the provider authentication mode is
+  explicitly set to Environment.
 - `wire_api`
   Currently normalized to `responses`.
 - `token`
@@ -156,9 +155,21 @@ env_key = "PROXY_API_KEY"
 wire_api = "responses"
 ```
 
-If you enter a token in CodexLauncher, the token is stored in its private local JSON file and
-injected through `env_key` when launching Codex. Fetch Models can use the
-stored token directly from the app.
+If you select Local Token in CodexLauncher, the token is stored in its private
+local JSON file. The launcher installs a private helper under Application
+Support and writes official command-backed authentication into `config.toml`:
+
+```toml
+[model_providers.proxy.auth]
+command = "/Users/me/Library/Application Support/CodexLauncher/bin/CodexLauncherTokenHelper"
+args = ["--print-provider-token", "proxy"]
+timeout_ms = 5000
+refresh_interval_ms = 0
+```
+
+Codex invokes this helper when it needs the bearer token. This works even when
+ChatGPT.app does not inherit environment variables from the launcher. Existing
+providers with a locally stored token and `env_key` are migrated automatically.
 
 For short-lived bearer tokens, Codex also supports command-backed
 authentication:
@@ -176,9 +187,9 @@ timeout_ms = 5000
 refresh_interval_ms = 300000
 ```
 
-The command must print only the bearer token to stdout. Command authentication
-cannot be combined with `env_key`, a locally stored token, `experimental_bearer_token`,
-or `requires_openai_auth`.
+The command must print only the bearer token to stdout. User-supplied Command
+authentication cannot be combined with `env_key`, a locally stored token,
+`experimental_bearer_token`, or `requires_openai_auth`.
 
 ### Profiles
 
@@ -208,7 +219,7 @@ model_catalog_json = "/Users/me/.codex/local-ollama-models.json"
 
 1. Open CodexLauncher.
 2. Add or select a Model Provider.
-3. Fill `base_url`, `env_key`, and optional token.
+3. Fill `base_url`, select Local Token, and enter the provider token.
 4. Click Save Provider.
 5. Add or select a Profile.
 6. Choose the provider in `model_provider`.
@@ -224,11 +235,11 @@ it with the selected profile.
 The Profile editor can fetch model names from the selected provider's `/models`
 endpoint.
 
-Token lookup order:
+Authentication lookup order:
 
-1. Token stored in CodexLauncher's private Application Support JSON for that provider.
-2. The configured `env_key` from the current process environment.
-3. The configured `env_key` from the user's login shell environment.
+1. A user-supplied authentication command, when Command mode is selected.
+2. Token stored in CodexLauncher's private Application Support JSON for that provider.
+3. The configured `env_key` from the current process or login shell environment.
 
 Fetched models are saved into the provider's model catalog JSON file under
 `~/.codex`.
@@ -258,7 +269,8 @@ They are stored in:
 ```
 
 The containing directory is set to mode `700` and the JSON file to mode `600`.
-Environment variables are created only in the launched ChatGPT process. Existing
+The managed token helper and its `bin` directory are set to mode `700`. The
+helper prints only the requested provider token to Codex over stdout. Existing
 legacy Keychain entries are not read, migrated, or deleted automatically.
 
 ## Local Files Created
@@ -271,6 +283,7 @@ Running the app may create or update:
 ~/.codex/<profile>.config.toml
 ~/.codex/<provider>-models.json
 ~/Library/Application Support/CodexLauncher/provider-secrets.json
+~/Library/Application Support/CodexLauncher/bin/CodexLauncherTokenHelper
 ~/.codex/backups/config-*.toml
 ```
 
@@ -278,24 +291,20 @@ Backups are created before writing `~/.codex/config.toml`.
 
 ## Release Packaging
 
-Build a release binary:
+Build the signed app and drag-to-Applications DMG:
 
 ```sh
-./script/build_and_run.sh --release --no-open
+./script/package_release.sh
 ```
 
 The current app version is read from `VERSION` and written to
 `CFBundleShortVersionString` and `CFBundleVersion`, so it appears in the macOS
 About window and Finder metadata.
 
-Zip the app for GitHub Releases:
+The script creates `dist/CodexLauncher-vX.Y.Z.dmg`. Opening the image shows the
+app alongside an `Applications` shortcut for drag-and-drop installation.
 
-```sh
-VERSION="$(tr -d '[:space:]' < VERSION)"
-ditto --noextattr --norsrc -c -k --keepParent dist/CodexLauncher.app "dist/CodexLauncher-v${VERSION}.zip"
-```
-
-`dist/` is intentionally ignored by Git. Upload the zip file as a GitHub Release
+`dist/` is intentionally ignored by Git. Upload the DMG as a GitHub Release
 asset instead of committing it to the repository.
 
 ## Notes
