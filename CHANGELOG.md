@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.6 - 2026-07-24
+
+- Generate new local model catalog entries with direct-tool compatibility defaults instead of copying capabilities from unrelated local catalogs or `models_cache.json`.
+- Add Model Catalog controls for tool mode, shell type, apply-patch type, multi-agent version, parallel calls, search, Responses Lite, modalities, and truncation mode.
+- Add a one-click compatibility reset that explicitly selects `tool_mode = "direct"` and `apply_patch_tool_type = null`.
+
 ## v0.1.5 - 2026-07-21
 
 - Deliver locally stored provider tokens through Codex command authentication instead of relying on ChatGPT.app to inherit launch environment variables.

@@ -137,8 +137,65 @@ final class ModelCatalogStore: ObservableObject {
     }
 
     private func defaultRawFields() -> [String: Any] {
-        if let existing = models.first?.rawFields, !existing.isEmpty {
-            return existing
+        Self.compatibilityRawFields(baseInstructions: preferredBaseInstructions())
+    }
+
+    static func applyCompatibilityPreset(to fields: inout [String: Any]) {
+        let baseInstructions = fields["base_instructions"] as? String ?? ""
+        let compatibilityFields = compatibilityRawFields(baseInstructions: baseInstructions)
+        let fieldsToRemove = [
+            "auto_review_model_override",
+            "comp_hash",
+            "default_service_tier",
+            "model_messages"
+        ]
+        for key in fieldsToRemove {
+            fields.removeValue(forKey: key)
+        }
+        for (key, value) in compatibilityFields {
+            fields[key] = value
+        }
+    }
+
+    static func compatibilityRawFields(baseInstructions: String = "") -> [String: Any] {
+        [
+            "additional_speed_tiers": [],
+            "apply_patch_tool_type": NSNull(),
+            "auto_compact_token_limit": NSNull(),
+            "availability_nux": NSNull(),
+            "base_instructions": baseInstructions,
+            "default_reasoning_level": NSNull(),
+            "default_reasoning_summary": "auto",
+            "default_verbosity": NSNull(),
+            "effective_context_window_percent": 95,
+            "experimental_supported_tools": [],
+            "input_modalities": ["text"],
+            "include_skills_usage_instructions": false,
+            "multi_agent_version": "disabled",
+            "priority": 0,
+            "service_tiers": [],
+            "shell_type": "default",
+            "support_verbosity": false,
+            "supported_in_api": true,
+            "supported_reasoning_levels": [],
+            "supports_image_detail_original": false,
+            "supports_parallel_tool_calls": false,
+            "supports_reasoning_summary_parameter": false,
+            "supports_reasoning_summaries": false,
+            "supports_search_tool": false,
+            "tool_mode": "direct",
+            "truncation_policy": ["limit": 10000, "mode": "bytes"],
+            "upgrade": NSNull(),
+            "use_responses_lite": false,
+            "visibility": "list",
+            "web_search_tool_type": "text"
+        ]
+    }
+
+    private func preferredBaseInstructions() -> String {
+        if let instructions = models.first?.rawFields["base_instructions"] as? String,
+           !instructions.isEmpty {
+            return instructions
         }
 
         let codexHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
@@ -151,47 +208,22 @@ final class ModelCatalogStore: ObservableObject {
 
         for filename in preferred {
             let url = codexHome.appendingPathComponent(filename)
-            if let fields = firstModelFields(from: url) {
-                return fields
+            if let instructions = firstModelBaseInstructions(from: url), !instructions.isEmpty {
+                return instructions
             }
         }
 
-        return [
-            "additional_speed_tiers": [],
-            "apply_patch_tool_type": NSNull(),
-            "auto_compact_token_limit": NSNull(),
-            "availability_nux": NSNull(),
-            "base_instructions": "",
-            "default_reasoning_level": NSNull(),
-            "default_reasoning_summary": "auto",
-            "default_verbosity": NSNull(),
-            "effective_context_window_percent": 95,
-            "experimental_supported_tools": [],
-            "input_modalities": ["text"],
-            "model_messages": NSNull(),
-            "priority": 0,
-            "shell_type": "default",
-            "support_verbosity": false,
-            "supported_in_api": true,
-            "supported_reasoning_levels": [],
-            "supports_image_detail_original": false,
-            "supports_parallel_tool_calls": false,
-            "supports_reasoning_summaries": false,
-            "supports_search_tool": false,
-            "truncation_policy": ["limit": 10000, "mode": "bytes"],
-            "upgrade": NSNull(),
-            "visibility": "list",
-            "web_search_tool_type": "text"
-        ]
+        return "You are Codex, a coding agent. Use the tools provided by the client to inspect, edit, and verify the workspace."
     }
 
-    private func firstModelFields(from url: URL) -> [String: Any]? {
+    private func firstModelBaseInstructions(from url: URL) -> String? {
         guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let rawModels = object["models"] as? [[String: Any]]
+              let rawModels = object["models"] as? [[String: Any]],
+              let firstModel = rawModels.first
         else { return nil }
 
-        return rawModels.first
+        return firstModel["base_instructions"] as? String
     }
 
     private func backupFile(at url: URL) throws {

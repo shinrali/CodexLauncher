@@ -256,6 +256,22 @@ CodexLauncher writes provider-specific model catalog files such as:
 These files let Codex show and resolve local/custom model metadata. The Model
 Catalog tab lets you inspect and edit the current profile's model metadata.
 
+New local model entries use conservative tool compatibility settings:
+
+- `tool_mode = "direct"`
+- `shell_type = "default"`
+- `apply_patch_tool_type = null`
+- `multi_agent_version = "disabled"`
+- `supports_parallel_tool_calls = false`
+- `supports_search_tool = false`
+- `use_responses_lite = false`
+
+The Model Catalog editor exposes these protocol-sensitive fields as menus and
+toggles. Code Mode, freeform apply-patch, parallel calls, search, and Responses
+Lite should only be enabled when the custom provider and model are known to
+support their corresponding request and tool formats. Restore Compatible
+Defaults resets these fields without replacing the model's base instructions.
+
 ## Token Handling
 
 Provider tokens are not written to the repository or to `config.toml`.
